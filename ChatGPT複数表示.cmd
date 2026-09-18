@@ -1,9 +1,68 @@
 @echo off
 setlocal
+chcp 65001 >nul 2>&1
+title ChatGPT複数表示
+
 set "SELF=%~f0"
 set "PSFILE=%TEMP%\ChatGPTMultiView_%RANDOM%_%RANDOM%.ps1"
+set "LOGFILE=%TEMP%\ChatGPT複数表示_エラー.log"
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$lines=Get-Content -LiteralPath $env:SELF -Encoding UTF8; $marker=[Array]::IndexOf($lines,'###POWERSHELL###'); if($marker -lt 0){exit 2}; $lines[($marker+1)..($lines.Count-1)] | Set-Content -LiteralPath $env:PSFILE -Encoding UTF8"
+del /q "%LOGFILE%" >nul 2>&1
+
+where powershell.exe >nul 2>&1
+if errorlevel 1 (
+  echo.
+  echo [エラー] Windows PowerShell が見つかりません。
+  echo この画面を閉じずに、この内容をChatGPTへ伝えてください。
+  echo.
+  pause
+  exit /b 1
+)
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$lines=Get-Content -LiteralPath $env:SELF -Encoding UTF8; $marker=[Array]::IndexOf($lines,'###POWERSHELL###'); if($marker -lt 0){throw 'PowerShell部分を見つけられません'}; $lines[($marker+1)..($lines.Count-1)] | Set-Content -LiteralPath $env:PSFILE -Encoding UTF8" 1>"%LOGFILE%" 2>&1
+if errorlevel 1 (
+  echo.
+  echo [エラー] 起動準備に失敗しました。
+  echo.
+  type "%LOGFILE%"
+  echo.
+  echo エラーログ:
+  echo %LOGFILE%
+  echo.
+  pause
+  exit /b 1
+)
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%" 1>"%LOGFILE%" 2>&1
+set "EXITCODE=%ERRORLEVEL%"
+del /q "%PSFILE%" >nul 2>&1
+
+if not "%EXITCODE%"=="0" (
+  echo.
+  echo [エラー] ChatGPT複数表示の起動に失敗しました。
+  echo.
+  type "%LOGFILE%"
+  echo.
+  echo エラーログ:
+  echo %LOGFILE%
+  echo.
+  echo この画面は自動では閉じません。
+  pause
+  exit /b %EXITCODE%
+)
+
+del /q "%LOGFILE%" >nul 2>&1
+exit /b 0
+
+###POWERSHELL###
+$ErrorActionPreference = 'Stop'
+trap {
+    Write-Output ("ERROR: " + $_.Exception.Message)
+    if ($_.ScriptStackTrace) { Write-Output $_.ScriptStackTrace }
+    exit 1
+}
+
+'); if($marker -lt 0){exit 2}; $lines[($marker+1)..($lines.Count-1)] | Set-Content -LiteralPath $env:PSFILE -Encoding UTF8"
 if errorlevel 1 (
   echo 起動準備に失敗しました。
   pause
