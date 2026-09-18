@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ChatGPT 複数表示</title>
+<style>
+  body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;max-width:760px;margin:40px auto;padding:0 20px;line-height:1.6}
+  h1{font-size:24px}
+  .row{display:flex;gap:10px;align-items:center;margin:10px 0}
+  label{width:90px}
+  input{flex:1;padding:9px;font-size:14px}
+  select,button{padding:9px 14px;font-size:14px}
+  button{cursor:pointer}
+  .note{background:#f3f3f3;padding:12px;border-radius:8px;margin-top:18px}
+  #status{margin-top:14px;font-weight:600}
+</style>
+</head>
+<body>
+<h1>ChatGPT 複数表示</h1>
+
+<div class="row">
+  <label for="count">表示数</label>
+  <select id="count">
+    <option value="2">2個</option>
+    <option value="3">3個</option>
+    <option value="4">4個</option>
+  </select>
+</div>
+
+<div id="urls"></div>
+
+<div class="row">
+  <button id="open">保存して開く</button>
+  <button id="reset" type="button">登録を消す</button>
+</div>
+
+<div id="status"></div>
+
+<div class="note">
+  初回だけ2～4個のChatGPTチャットURLを登録します。<br>
+  次回からは保存済みURLが自動で表示されます。引き継ぎでチャットが変わった場合はURLを書き換えて「保存して開く」を押してください。<br><br>
+  このファイルはPowerShell・コマンドプロンプト・外部プログラムを実行しません。
+</div>
+
+<script>
+(() => {
+  const KEY = 'chatgpt-multi-view-v1';
+  const countEl = document.getElementById('count');
+  const urlsEl = document.getElementById('urls');
+  const statusEl = document.getElementById('status');
+
+  function load() {
+    try {
+      return JSON.parse(localStorage.getItem(KEY) || '{}');
+    } catch {
+      return {};
+    }
+  }
+
+  function render() {
+    const n = Number(countEl.value);
+    const old = [...urlsEl.querySelectorAll('input')].map(x => x.value);
+    urlsEl.innerHTML = '';
+    for (let i = 0; i < n; i++) {
+      const row = document.createElement('div');
+      row.className = 'row';
+      const label = document.createElement('label');
+      label.textContent = 'Chat ' + (i + 1);
+      const input = document.createElement('input');
+      input.type = 'url';
+      input.placeholder = 'https://chatgpt.com/c/...';
+      input.value = old[i] || '';
+      row.append(label, input);
+      urlsEl.appendChild(row);
+    }
+  }
+
+  const saved = load();
+  if ([2,3,4].includes(Number(saved.count))) {
+    countEl.value = String(saved.count);
+  }
+  render();
+
+  if (Array.isArray(saved.urls)) {
+    [...urlsEl.querySelectorAll('input')].forEach((input, i) => {
+      input.value = saved.urls[i] || '';
+    });
+  }
+
+  countEl.addEventListener('change', render);
+
+  document.getElementById('reset').addEventListener('click', () => {
+    localStorage.removeItem(KEY);
+    countEl.value = '2';
+    render();
+    statusEl.textContent = '登録を消しました。';
+  });
+
+  document.getElementById('open').addEventListener('click', () => {
+    const n = Number(countEl.value);
+    const urls = [...urlsEl.querySelectorAll('input')].map(x => x.value.trim());
+
+    for (let i = 0; i < urls.length; i++) {
+      if (!/^https:\/\/chatgpt\.com\//i.test(urls[i])) {
+        statusEl.textContent = 'Chat ' + (i + 1) + ' のURLを確認してください。';
+        return;
+      }
+    }
+
+    localStorage.setItem(KEY, JSON.stringify({count:n, urls}));
+
+    const totalW = screen.availWidth;
+    const totalH = screen.availHeight;
+    const baseX = Number.isFinite(screen.availLeft) ? screen.availLeft : 0;
+    const baseY = Number.isFinite(screen.availTop) ? screen.availTop : 0;
+    const colW = Math.floor(totalW / n);
+
+    let blocked = 0;
+
+    urls.forEach((url, i) => {
+      const left = baseX + colW * i;
+      const width = (i === n - 1) ? (totalW - colW * i) : colW;
+      const features = [
+        'popup=yes',
+        'left=' + left,
+        'top=' + baseY,
+        'width=' + width,
+        'height=' + totalH,
+        'resizable=yes',
+        'scrollbars=yes'
+      ].join(',');
+
+      const w = window.open(url, 'ChatGPTMultiView_' + i, features);
+      if (!w) {
+        blocked++;
+        return;
+      }
+      try {
+        w.moveTo(left, baseY);
+        w.resizeTo(width, totalH);
+        w.focus();
+      } catch {}
+    });
+
+    if (blocked > 0) {
+      statusEl.textContent = blocked + '個の窓がブラウザに止められました。ポップアップを許可して、もう一度「保存して開く」を押してください。';
+    } else {
+      statusEl.textContent = 'ChatGPTを ' + n + ' 個開きました。';
+    }
+  });
+})();
+</script>
+</body>
+</html>
