@@ -62,19 +62,6 @@ trap {
     exit 1
 }
 
-'); if($marker -lt 0){exit 2}; $lines[($marker+1)..($lines.Count-1)] | Set-Content -LiteralPath $env:PSFILE -Encoding UTF8"
-if errorlevel 1 (
-  echo 起動準備に失敗しました。
-  pause
-  exit /b 1
-)
-
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PSFILE%"
-set "EXITCODE=%ERRORLEVEL%"
-del /q "%PSFILE%" >nul 2>&1
-exit /b %EXITCODE%
-
-###POWERSHELL###
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName Microsoft.VisualBasic
 
