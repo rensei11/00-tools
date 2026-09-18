@@ -44,7 +44,27 @@ if (Test-Path -LiteralPath $configPath) {
     }
 }
 
-if ($urls.Count -lt 2 -or $urls.Count -gt 4) {
+$changeSettings = $false
+
+if ($urls.Count -ge 2 -and $urls.Count -le 4) {
+    $choice = [System.Windows.Forms.MessageBox]::Show(
+        "保存済みの $($urls.Count) 個のチャットを開きますか？`r`n`r`nはい：そのまま開く`r`nいいえ：チャットを入れ替える`r`nキャンセル：終了",
+        'ChatGPT複数表示',
+        [System.Windows.Forms.MessageBoxButtons]::YesNoCancel,
+        [System.Windows.Forms.MessageBoxIcon]::Question
+    )
+
+    if ($choice -eq [System.Windows.Forms.DialogResult]::Cancel) {
+        exit 0
+    }
+
+    if ($choice -eq [System.Windows.Forms.DialogResult]::No) {
+        $changeSettings = $true
+        $urls = @()
+    }
+}
+
+if ($urls.Count -lt 2 -or $urls.Count -gt 4 -or $changeSettings) {
     $countText = [Microsoft.VisualBasic.Interaction]::InputBox(
         "同時に表示するChatGPTチャット数を 2～4 で入力してください。","ChatGPT複数表示","3"
     )
