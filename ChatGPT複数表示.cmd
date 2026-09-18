@@ -3,7 +3,7 @@ setlocal
 set "SELF=%~f0"
 set "PSFILE=%TEMP%\ChatGPTMultiView_%RANDOM%_%RANDOM%.ps1"
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$lines=Get-Content -LiteralPath $env:SELF; $marker=[Array]::IndexOf($lines,'###POWERSHELL###'); if($marker -lt 0){exit 2}; $lines[($marker+1)..($lines.Count-1)] | Set-Content -LiteralPath $env:PSFILE -Encoding UTF8"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$lines=Get-Content -LiteralPath $env:SELF -Encoding UTF8; $marker=[Array]::IndexOf($lines,'###POWERSHELL###'); if($marker -lt 0){exit 2}; $lines[($marker+1)..($lines.Count-1)] | Set-Content -LiteralPath $env:PSFILE -Encoding UTF8"
 if errorlevel 1 (
   echo 起動準備に失敗しました。
   pause
@@ -63,7 +63,7 @@ if ($urls.Count -lt 2 -or $urls.Count -gt 4) {
     for ($i = 1; $i -le $count; $i++) {
         while ($true) {
             $url = [Microsoft.VisualBasic.Interaction]::InputBox(
-                "ChatGPTで表示したいチャットを開き、上のURLをコピーして貼り付けてください。\r\n\r\n$i 個目 / $count 個",
+                "ChatGPTで表示したいチャットを開き、上のURLをコピーして貼り付けてください。`r`n`r`n$i 個目 / $count 個",
                 "ChatGPT複数表示",
                 ""
             )
@@ -79,7 +79,7 @@ if ($urls.Count -lt 2 -or $urls.Count -gt 4) {
             }
 
             [System.Windows.Forms.MessageBox]::Show(
-                "ChatGPTのURLではないようです。\r\nhttps://chatgpt.com/ で始まるURLを貼り付けてください。",
+                "ChatGPTのURLではないようです。`r`nhttps://chatgpt.com/ で始まるURLを貼り付けてください。",
                 'ChatGPT複数表示',
                 [System.Windows.Forms.MessageBoxButtons]::OK,
                 [System.Windows.Forms.MessageBoxIcon]::Warning
