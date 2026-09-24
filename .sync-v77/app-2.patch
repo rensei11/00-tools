@@ -1,0 +1,18 @@
+--- app.py
++++ app.py
+@@ -78,6 +78,7 @@
+     fallback_voice_entries,
+     get_last_fallback_status,
+     get_last_hf_scan_info,
++    normalized_character_title,
+     normalized_file_title,
+     normalized_words,
+     page_parts,
+@@ -949,7 +950,7 @@ def voice_page_identity(url: str) -> tuple[str, str]:
+         path,
+         re.I,
+     )
+-    owner = normalized_words(match.group(1).replace("_", " ")) if match else ""
++    owner = normalized_character_title(match.group(1)) if match else ""
+     return host, owner
+ 
