@@ -13,287 +13,38 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Patch v76 package to exact v77 files
-        shell: python
+      - name: Patch package
         run: |
-          import hashlib
-          import json
-          import subprocess
+          python - <<'PY'
+          import hashlib, json, subprocess
           from pathlib import Path
-
           package = Path('fandom-voice-tool-latest.json')
           payload = json.loads(package.read_text(encoding='utf-8'))
-          assert payload['version'] == '2026-09-24-v76', payload['version']
-
-          patches = [
-              ('app.py', r'''@@ -83,6 +83,8 @@
-     page_parts,
-     parse_voice_entries,
-     read_duration,
-+    source_game_name,
-+    validate_character_source_page,
-     validate_fandom_origin,
-     workers_from_mode,
- )
-@@ -113,7 +115,7 @@
- )
- 
- 
--APP_VERSION = "2026-09-24-v76"
-+APP_VERSION = "2026-09-24-v77"
- TABLE_HEADERS = ["使用する", "要確認", "長さ（秒）", "項目名", "台詞", "ファイル名", "判定理由"]
- TARGET_SECONDS = (30, 60, 90, 120)
- APP_CSS = """
-@@ -796,6 +798,12 @@ def fetch_and_save(
-         char_name = safe_name(character, "キャラクター")
-         progress(0.03, desc="ページ確認中")
-         origin, page_title = page_parts(page_url)
-+        verified_character_title = validate_character_source_page(
-+            origin,
-+            page_title,
-+            character,
-+        )
-+        source_game = source_game_name(origin)
-         source_mode = "voice_page"
-         host = (urlparse(origin).hostname or "").casefold()
-         is_japanese_voice_page = (
-@@ -821,8 +829,14 @@ def fetch_and_save(
-             progress(0.10, desc="本人の音声カテゴリ確認中")
-             entries = fallback_voice_entries(origin, page_title)
-             progress(0.16, desc="日本語音声URL取得中")
-+        default_provider = f"fandom:{host}"
-         for item in entries:
-             item["referer"] = page_url
-+            item["source_page"] = page_url
-+            item["source_game"] = source_game
-+            item["source_character"] = char_name
-+            item.setdefault("source_language", "ja")
-+            item.setdefault("source_provider", default_provider)
-         fallback_status = get_last_fallback_status()
-         scan_info = get_last_hf_scan_info()
-         if not entries:
-@@ -865,11 +879,25 @@ def fetch_and_save(
-             if key in previous_selection:
-                 item["selected"] = previous_selection[key]
-         table = records_to_table(records)
-+        providers = sorted({
-+            str(item.get("source_provider", "")).strip()
-+            for item in records
-+            if str(item.get("source_provider", "")).strip()
-+        })
-         metadata = {
--            "character": char_name, "source_page": page_url, "page_title": page_title,
-+            "game": source_game,
-+            "character": char_name,
-+            "language": "ja",
-+            "source_page": page_url,
-+            "source_host": host,
-+            "source_character_title": verified_character_title,
-+            "page_title": page_title,
-             "source_mode": source_mode,
-+            "source_provider": providers[0] if len(providers) == 1 else ("mixed" if providers else ""),
-+            "source_providers": providers,
-             "source_revision": FALLBACK_SOURCE_REVISION if source_mode == "character_files" else "",
--            "updated_at": datetime.now().isoformat(timespec="seconds"), "files": records,
-+            "updated_at": datetime.now().isoformat(timespec="seconds"),
-+            "files": records,
-             "download_errors": [str(error) for error in errors],
-         }
-         if (
-@@ -912,19 +940,35 @@ def fetch_and_save(
-         return [], "<p>音声を表示できません。</p>", "選択中：0件／合計 0.0 秒", f"エラー：{exc}", [], character
- 
- 
-+def voice_page_identity(url: str) -> tuple[str, str]:
-+    parsed = urlparse(str(url or "").strip())
-+    host = (parsed.hostname or "").casefold()
-+    path = unquote(parsed.path).rstrip("/")
-+    match = re.search(
-+        r"/wiki/(.+?)(?:/Voice-Overs/Japanese|/Voicelines/Japanese|/Voice-Overs)?$",
-+        path,
-+        re.I,
-+    )
-+    owner = normalized_words(match.group(1).replace("_", " ")) if match else ""
-+    return host, owner
-+
-+
- def voice_page_owner(url: str) -> str:
--    path = unquote(urlparse(str(url or "")).path)
--    match = re.search(r"/wiki/([^/]+)(?:/Voice-Overs/Japanese)?$", path.rstrip("/"), re.I)
--    return normalized_words(match.group(1).replace("_", " ")) if match else ""
-+    return voice_page_identity(url)[1]
- 
- 
- def saved_records_match_page(records: list[dict[str, Any]], expected_page: str) -> bool:
--    expected_owner = voice_page_owner(expected_page)
--    if not expected_owner:
-+    expected_identity = voice_page_identity(expected_page)
-+    if not all(expected_identity):
-         return True
--    owners = {voice_page_owner(str(item.get("referer", ""))) for item in records}
--    owners.discard("")
--    return not owners or owners == {expected_owner}
-+    identities = {
-+        voice_page_identity(
-+            str(item.get("source_page") or item.get("referer", ""))
-+        )
-+        for item in records
-+    }
-+    identities.discard(("", ""))
-+    return not identities or identities == {expected_identity}
- 
- 
- def load_saved_records(character: str, expected_page: str = "") -> tuple[list[dict[str, Any]], str, str]:'''),
-              ('acquisition_service.py', r'''@@ -119,7 +119,7 @@ def validate_character_source_page(
- 
-     resolved = resolve_character_title(origin, lookup_name)
-     expected_title = resolved or lookup_name
--    if normalized_words(actual_title) != normalized_words(expected_title):
-+    if normalized_character_title(actual_title) != normalized_character_title(expected_title):
-         raise ValueError(
-             "入力したURLは指定キャラクター本人のページだと確認できません。"
-             f" 指定：{character}／URL側：{actual_title}"
-@@ -305,6 +305,15 @@ def category_members(origin: str, category_title: str, limit: int = 1000) -> lis
- def normalized_words(value: str) -> str:
-     return re.sub(r"[^0-9a-z]+", " ", unquote(str(value)).casefold()).strip()
- 
-+
-+def normalized_character_title(value: str) -> str:
-+    return re.sub(
-+        r"[\W_]+",
-+        "",
-+        unquote(str(value or "")).replace("_", " ").casefold(),
-+        flags=re.UNICODE,
-+    )
-+
- def is_japanese_character_audio(page: dict[str, Any], character_title: str) -> bool:
-     title = str(page.get("title", ""))
-     words = normalized_words(title.removeprefix("File:"))'''),
-              ('app.py', r'''@@ -78,6 +78,7 @@
-     fallback_voice_entries,
-     get_last_fallback_status,
-     get_last_hf_scan_info,
-+    normalized_character_title,
-     normalized_file_title,
-     normalized_words,
-     page_parts,
-@@ -949,7 +950,7 @@ def voice_page_identity(url: str) -> tuple[str, str]:
-         path,
-         re.I,
-     )
--    owner = normalized_words(match.group(1).replace("_", " ")) if match else ""
-+    owner = normalized_character_title(match.group(1)) if match else ""
-     return host, owner
- 
- '''),
-              ('app.py', r'''@@ -972,14 +972,33 @@ def saved_records_match_page(records: list[dict[str, Any]], expected_page: str)
-     return not identities or identities == {expected_identity}
- 
- 
--def load_saved_records(character: str, expected_page: str = "") -> tuple[list[dict[str, Any]], str, str]:
-+def load_saved_records(
-+    character: str,
-+    expected_page: str = "",
-+    expected_game: str = "",
-+) -> tuple[list[dict[str, Any]], str, str]:
-     name = safe_name(character, "")
-     if not name:
-         return [], "", "キャラクター名を入力してください。"
-     path = character_metadata_path(name)
-     if not path.exists():
-         return [], "", "保存済み一覧はありません。初回取得を行います。"
-     data = read_json(path, {})
-+    saved_page_for_game = str(data.get("source_page", "")) if isinstance(data, dict) else ""
-+    saved_game = str(data.get("game", "")).strip() if isinstance(data, dict) else ""
-+    if not saved_game and saved_page_for_game:
-+        try:
-+            saved_origin, _saved_title = page_parts(saved_page_for_game)
-+            saved_game = source_game_name(saved_origin)
-+        except Exception:
-+            saved_game = ""
-+    requested_game = str(expected_game or "").strip()
-+    if requested_game and saved_game and requested_game != saved_game:
-+        return (
-+            [],
-+            "",
-+            f"保存済み一覧は別作品（{saved_game}）の内容だったため使用しません。",
-+        )
-     if (
-         isinstance(data, dict)
-         and data.get("source_mode") == "character_files"
-@@ -1009,10 +1028,15 @@ def collect_or_load(
-     page_url: str,
-     character: str,
-     parallel_mode: str,
-+    game_name: str = "",
-     force_refresh: bool = False,
-     progress: gr.Progress = gr.Progress(track_tqdm=False),
- ) -> tuple[list[dict[str, Any]], str, str, str]:
--    saved, saved_page, saved_status = load_saved_records(character, page_url)
-+    saved, saved_page, saved_status = load_saved_records(
-+        character,
-+        page_url,
-+        game_name,
-+    )
-     if saved and not force_refresh:
-         if is_paimon_character(character):
-             published = read_json(PAIMON_SHARED_PUBLISHED_PATH, {})
-@@ -1043,9 +1067,17 @@ def refresh_from_network(
-     page_url: str,
-     character: str,
-     parallel_mode: str,
-+    game_name: str = "",
-     progress: gr.Progress = gr.Progress(track_tqdm=False),
- ) -> tuple[list[dict[str, Any]], str, str, str]:
--    return collect_or_load(page_url, character, parallel_mode, True, progress)
-+    return collect_or_load(
-+        page_url,
-+        character,
-+        parallel_mode,
-+        game_name,
-+        True,
-+        progress,
-+    )
- 
- 
- def reset_collection_view() -> tuple[str, list[Any], str, str]:
-@@ -2800,8 +2832,8 @@ def render_join_rows(join_records: list[dict[str, Any]], standard_interval: floa
-             [manual_register_status, speaker, compare_speaker, emotion_compare_speaker, manual_records_state],
-         )
-         detect_button.click(detect_page, [game, character, custom_wiki], [page_url, collect_status])
--        collect_button.click(collect_or_load, [page_url, character, parallel_mode], [records_state, total, collect_status, page_url])
--        refresh_button.click(refresh_from_network, [page_url, character, parallel_mode], [records_state, total, collect_status, page_url])
-+        collect_button.click(collect_or_load, [page_url, character, parallel_mode, game], [records_state, total, collect_status, page_url])
-+        refresh_button.click(refresh_from_network, [page_url, character, parallel_mode, game], [records_state, total, collect_status, page_url])
-         records_state.change(voice_table_payload, [records_state, review_only], [voice_table, visible_keys_state], show_progress="hidden")
-         review_only.change(voice_table_payload, [records_state, review_only], [voice_table, visible_keys_state], show_progress="hidden")
-         voice_table.input('''),
-          ]
-
-          for name, diff in patches:
+          assert payload['version'] == '2026-09-24-v76'
+          for name, patch_name in [
+              ('app.py', '.sync-v77/app-1.patch'),
+              ('acquisition_service.py', '.sync-v77/acquisition.patch'),
+              ('app.py', '.sync-v77/app-2.patch'),
+              ('app.py', '.sync-v77/app-3.patch'),
+          ]:
               path = Path(name)
               path.write_text(payload['files'][name], encoding='utf-8')
-              patch = Path(name + '.patch')
-              patch.write_text('--- ' + name + '\n+++ ' + name + '\n' + diff + '\n', encoding='utf-8')
-              subprocess.run(['patch', '--batch', '--forward', name, str(patch)], check=True)
+              subprocess.run(['patch', '--batch', '--forward', name, patch_name], check=True)
               payload['files'][name] = path.read_text(encoding='utf-8')
               path.unlink()
-              patch.unlink()
-
           def blob_sha(text):
               data = text.encode('utf-8')
               return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
-
           assert blob_sha(payload['files']['app.py']) == '8fc8c83db5b310b66d9b772607ad1f2a08ba22e3'
           assert blob_sha(payload['files']['acquisition_service.py']) == 'e09dbc9c1512d4666303872d9c49966eec7f7e71'
           payload['version'] = '2026-09-24-v77'
           package.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
           check = json.loads(package.read_text(encoding='utf-8'))
           assert check['version'] == '2026-09-24-v77'
-          assert 'start_local.ps1' in check['files']
-          assert 'update_and_start.ps1' in check['files']
-          assert 'shared_results/paimon.json' in check['files']
-      - name: Commit v77 package
+          for required in ('app.py','start_local.ps1','update_and_start.ps1','shared_results/paimon.json'):
+              assert required in check['files']
+          PY
+      - name: Commit package
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
