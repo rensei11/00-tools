@@ -1,0 +1,84 @@
+--- app.py
++++ app.py
+@@ -972,14 +972,33 @@ def saved_records_match_page(records: list[dict[str, Any]], expected_page: str)
+     return not identities or identities == {expected_identity}
+ 
+ 
+-def load_saved_records(character: str, expected_page: str = "") -> tuple[list[dict[str, Any]], str, str]:
++def load_saved_records(
++    character: str,
++    expected_page: str = "",
++    expected_game: str = "",
++) -> tuple[list[dict[str, Any]], str, str]:
+     name = safe_name(character, "")
+     if not name:
+         return [], "", "キャラクター名を入力してください。"
+     path = character_metadata_path(name)
+     if not path.exists():
+         return [], "", "保存済み一覧はありません。初回取得を行います。"
+     data = read_json(path, {})
++    saved_page_for_game = str(data.get("source_page", "")) if isinstance(data, dict) else ""
++    saved_game = str(data.get("game", "")).strip() if isinstance(data, dict) else ""
++    if not saved_game and saved_page_for_game:
++        try:
++            saved_origin, _saved_title = page_parts(saved_page_for_game)
++            saved_game = source_game_name(saved_origin)
++        except Exception:
++            saved_game = ""
++    requested_game = str(expected_game or "").strip()
++    if requested_game and saved_game and requested_game != saved_game:
++        return (
++            [],
++            "",
++            f"保存済み一覧は別作品（{saved_game}）の内容だったため使用しません。",
++        )
+     if (
+         isinstance(data, dict)
+         and data.get("source_mode") == "character_files"
+@@ -1009,10 +1028,15 @@ def collect_or_load(
+     page_url: str,
+     character: str,
+     parallel_mode: str,
++    game_name: str = "",
+     force_refresh: bool = False,
+     progress: gr.Progress = gr.Progress(track_tqdm=False),
+ ) -> tuple[list[dict[str, Any]], str, str, str]:
+-    saved, saved_page, saved_status = load_saved_records(character, page_url)
++    saved, saved_page, saved_status = load_saved_records(
++        character,
++        page_url,
++        game_name,
++    )
+     if saved and not force_refresh:
+         if is_paimon_character(character):
+             published = read_json(PAIMON_SHARED_PUBLISHED_PATH, {})
+@@ -1043,9 +1067,17 @@ def refresh_from_network(
+     page_url: str,
+     character: str,
+     parallel_mode: str,
++    game_name: str = "",
+     progress: gr.Progress = gr.Progress(track_tqdm=False),
+ ) -> tuple[list[dict[str, Any]], str, str, str]:
+-    return collect_or_load(page_url, character, parallel_mode, True, progress)
++    return collect_or_load(
++        page_url,
++        character,
++        parallel_mode,
++        game_name,
++        True,
++        progress,
++    )
+ 
+ 
+ def reset_collection_view() -> tuple[str, list[Any], str, str]:
+@@ -2800,8 +2832,8 @@ def render_join_rows(join_records: list[dict[str, Any]], standard_interval: floa
+             [manual_register_status, speaker, compare_speaker, emotion_compare_speaker, manual_records_state],
+         )
+         detect_button.click(detect_page, [game, character, custom_wiki], [page_url, collect_status])
+-        collect_button.click(collect_or_load, [page_url, character, parallel_mode], [records_state, total, collect_status, page_url])
+-        refresh_button.click(refresh_from_network, [page_url, character, parallel_mode], [records_state, total, collect_status, page_url])
++        collect_button.click(collect_or_load, [page_url, character, parallel_mode, game], [records_state, total, collect_status, page_url])
++        refresh_button.click(refresh_from_network, [page_url, character, parallel_mode, game], [records_state, total, collect_status, page_url])
+         records_state.change(voice_table_payload, [records_state, review_only], [voice_table, visible_keys_state], show_progress="hidden")
+         review_only.change(voice_table_payload, [records_state, review_only], [voice_table, visible_keys_state], show_progress="hidden")
+         voice_table.input(
