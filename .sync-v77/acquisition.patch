@@ -1,0 +1,27 @@
+--- acquisition_service.py
++++ acquisition_service.py
+@@ -119,7 +119,7 @@ def validate_character_source_page(
+ 
+     resolved = resolve_character_title(origin, lookup_name)
+     expected_title = resolved or lookup_name
+-    if normalized_words(actual_title) != normalized_words(expected_title):
++    if normalized_character_title(actual_title) != normalized_character_title(expected_title):
+         raise ValueError(
+             "入力したURLは指定キャラクター本人のページだと確認できません。"
+             f" 指定：{character}／URL側：{actual_title}"
+@@ -305,6 +305,15 @@ def category_members(origin: str, category_title: str, limit: int = 1000) -> lis
+ def normalized_words(value: str) -> str:
+     return re.sub(r"[^0-9a-z]+", " ", unquote(str(value)).casefold()).strip()
+ 
++
++def normalized_character_title(value: str) -> str:
++    return re.sub(
++        r"[\W_]+",
++        "",
++        unquote(str(value or "")).replace("_", " ").casefold(),
++        flags=re.UNICODE,
++    )
++
+ def is_japanese_character_audio(page: dict[str, Any], character_title: str) -> bool:
+     title = str(page.get("title", ""))
+     words = normalized_words(title.removeprefix("File:"))
