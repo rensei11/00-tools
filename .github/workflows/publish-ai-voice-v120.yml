@@ -1,0 +1,30 @@
+name: Publish AI Voice v120
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/publish-ai-voice-v120.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Patch existing Public JSON
+        run: python patch_ai_voice_v120.py
+      - name: Commit Public JSON
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fandom-voice-tool-latest.json
+          git diff --cached --quiet && exit 0
+          git commit -m "Publish AI voice tool v120"
+          git push
