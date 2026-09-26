@@ -1,0 +1,17 @@
+name: Production Approval Gate
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  approval-gate:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Approval received
+        run: echo "Production approval granted."
