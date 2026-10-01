@@ -2,13 +2,12 @@ $ErrorActionPreference = 'Stop'
 
 $logPath = Join-Path $env:TEMP 'rensei_black_codex_recovery_log.txt'
 
-if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
-    'wsl.exe was not found.' | Set-Content -LiteralPath $logPath -Encoding ASCII
-    Write-Host 'wsl.exe was not found.'
-    exit 1
-}
+try {
+    if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
+        throw 'wsl.exe was not found.'
+    }
 
-$script = @'
+    $script = @'
 set -eu
 command -v git >/dev/null 2>&1 || { echo "git was not found in WSL."; exit 10; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 was not found in WSL."; exit 11; }
@@ -26,13 +25,28 @@ git -C "$REPO" fetch origin
 git -C "$REPO" show origin/main:tools/run_black_codex.py | python3 - --control-repo "$REPO"
 '@
 
-& wsl.exe -d Ubuntu -- bash -lc $script 2>&1 | Tee-Object -FilePath $logPath
-$rc = $LASTEXITCODE
+    $output = & wsl.exe -d Ubuntu -- bash -lc $script 2>&1
+    $rc = $LASTEXITCODE
+    $output | Tee-Object -FilePath $logPath
 
-if ($rc -ne 0) {
-    Write-Host ""
-    Write-Host "Black Codex recovery failed. Details were saved to:"
-    Write-Host $logPath
+    if ($rc -ne 0) {
+        throw "WSL runner exited with code $rc."
+    }
+
+    'SUCCESS' | Add-Content -LiteralPath $logPath -Encoding ASCII
+    exit 0
 }
+catch {
+    $message = $_.Exception.Message
+    @(
+        'Black Codex recovery failed.'
+        $message
+    ) | Set-Content -LiteralPath $logPath -Encoding ASCII
 
-exit $rc
+    Write-Host 'Black Codex recovery failed.'
+    Write-Host $message
+    Write-Host ''
+    Write-Host 'Details were saved to:'
+    Write-Host $logPath
+    exit 1
+}
