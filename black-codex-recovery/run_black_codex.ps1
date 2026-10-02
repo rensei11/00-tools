@@ -14,21 +14,81 @@ function Write-RecoveryLog {
     )
 }
 
-function Invoke-WslChecked {
-    param([string]$Script, [string]$Stage)
-    $output = @(& wsl.exe -d Ubuntu -- bash -lc $Script 2>&1)
-    $rc = $LASTEXITCODE
-    foreach ($line in $output) {
-        Write-RecoveryLog ($Stage + ': ' + [string]$line)
+function Invoke-WslCommand {
+    param(
+        [string]$Arguments,
+        [string]$Stage,
+        [AllowNull()][string]$InputText = $null,
+        [switch]$AllowFailure
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Arguments)) {
+        throw ($Stage + ': empty WSL command.')
     }
-    if ($rc -ne 0) {
-        $tail = (($output | Select-Object -Last 20) | Out-String).Trim()
-        if ([string]::IsNullOrWhiteSpace($tail)) {
-            throw ($Stage + ' failed with exit code ' + $rc + '.')
+    if ($Arguments.IndexOf([char]13) -ge 0 -or $Arguments.IndexOf([char]10) -ge 0 -or $Arguments.Contains('"')) {
+        throw ($Stage + ': unsafe WSL argument string.')
+    }
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = 'wsl.exe'
+    $startInfo.Arguments = '-d Ubuntu -- ' + $Arguments
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = New-Object Text.UTF8Encoding($false)
+    $startInfo.StandardErrorEncoding = New-Object Text.UTF8Encoding($false)
+    if ($null -ne $InputText) {
+        $startInfo.RedirectStandardInput = $true
+    }
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw ($Stage + ': wsl.exe did not start.')
+    }
+
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    if ($null -ne $InputText) {
+        $inputBytes = (New-Object Text.UTF8Encoding($false)).GetBytes($InputText)
+        $process.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length)
+        $process.StandardInput.BaseStream.Flush()
+        $process.StandardInput.Close()
+    }
+
+    $process.WaitForExit()
+    $stdout = $stdoutTask.Result
+    $stderr = $stderrTask.Result
+    $exitCode = $process.ExitCode
+    $process.Dispose()
+
+    foreach ($line in @($stdout, $stderr)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+            foreach ($part in ([string]$line -split '\r?\n')) {
+                if (-not [string]::IsNullOrWhiteSpace($part)) {
+                    Write-RecoveryLog ($Stage + ': ' + $part)
+                }
+            }
         }
-        throw ($Stage + ' failed with exit code ' + $rc + '. ' + $tail)
     }
-    return @($output)
+
+    if ($exitCode -ne 0 -and -not $AllowFailure) {
+        $detail = $stderr.Trim()
+        if ([string]::IsNullOrWhiteSpace($detail)) {
+            $detail = $stdout.Trim()
+        }
+        if ([string]::IsNullOrWhiteSpace($detail)) {
+            throw ($Stage + ' failed with exit code ' + $exitCode + '.')
+        }
+        throw ($Stage + ' failed with exit code ' + $exitCode + '. ' + $detail)
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Stdout = $stdout
+        Stderr = $stderr
+    }
 }
 
 try {
@@ -38,29 +98,31 @@ try {
         throw 'wsl.exe was not found.'
     }
 
-    $probe = "printf 'WSL_READY\\n'"
-    $probeOutput = @(Invoke-WslChecked $probe 'wsl-preflight')
-    if (($probeOutput -join [Environment]::NewLine) -notmatch 'WSL_READY') {
-        throw 'Ubuntu WSL did not return the readiness marker.'
+    $probe = Invoke-WslCommand -Arguments 'uname -s' -Stage 'wsl-preflight'
+    if ($probe.Stdout.Trim() -ne 'Linux') {
+        throw 'Ubuntu WSL did not return the Linux readiness marker.'
     }
 
-    $prepare = @'
-set -euo pipefail
-export GIT_TERMINAL_PROMPT=0
-command -v git >/dev/null 2>&1 || { echo "git was not found in WSL."; exit 10; }
-command -v python3 >/dev/null 2>&1 || { echo "python3 was not found in WSL."; exit 11; }
-command -v codex >/dev/null 2>&1 || { echo "codex was not found in WSL."; exit 12; }
-if [ ! -d /home/rensei/codex-chase/05-AI-voice/.git ]; then
-  mkdir -p /home/rensei/codex-chase
-  git clone https://github.com/rensei11/05-AI-voice.git /home/rensei/codex-chase/05-AI-voice >/dev/null 2>&1 || { echo "git clone failed."; exit 14; }
-fi
-test "$(git -C /home/rensei/codex-chase/05-AI-voice remote get-url origin)" = "https://github.com/rensei11/05-AI-voice.git" || { echo "Unexpected Git origin."; exit 13; }
-git -C /home/rensei/codex-chase/05-AI-voice fetch origin >/dev/null 2>&1 || { echo "git fetch failed."; exit 15; }
-git -C /home/rensei/codex-chase/05-AI-voice rev-parse --verify origin/main >/dev/null
-git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/codex_windows_bridge.ps1
-'@
-    $bridgeSource = @(Invoke-WslChecked $prepare 'bridge-source-preflight')
-    $bridgeText = [string]::Join([Environment]::NewLine, @($bridgeSource)).TrimStart([char]0xFEFF)
+    [void](Invoke-WslCommand -Arguments 'git --version' -Stage 'git-preflight')
+    [void](Invoke-WslCommand -Arguments 'python3 --version' -Stage 'python-preflight')
+    [void](Invoke-WslCommand -Arguments 'codex --version' -Stage 'codex-preflight')
+
+    $repoCheck = Invoke-WslCommand -Arguments 'git -C /home/rensei/codex-chase/05-AI-voice rev-parse --is-inside-work-tree' -Stage 'repo-preflight' -AllowFailure
+    if ($repoCheck.ExitCode -ne 0 -or $repoCheck.Stdout.Trim() -ne 'true') {
+        [void](Invoke-WslCommand -Arguments 'mkdir -p /home/rensei/codex-chase' -Stage 'repo-parent-create')
+        [void](Invoke-WslCommand -Arguments 'env GIT_TERMINAL_PROMPT=0 git clone https://github.com/rensei11/05-AI-voice.git /home/rensei/codex-chase/05-AI-voice' -Stage 'repo-clone')
+    }
+
+    $origin = Invoke-WslCommand -Arguments 'git -C /home/rensei/codex-chase/05-AI-voice remote get-url origin' -Stage 'origin-check'
+    if ($origin.Stdout.Trim() -ne 'https://github.com/rensei11/05-AI-voice.git') {
+        throw 'Unexpected Git origin for AI voice control repo.'
+    }
+
+    [void](Invoke-WslCommand -Arguments 'env GIT_TERMINAL_PROMPT=0 git -C /home/rensei/codex-chase/05-AI-voice fetch origin' -Stage 'git-fetch')
+    [void](Invoke-WslCommand -Arguments 'git -C /home/rensei/codex-chase/05-AI-voice rev-parse --verify origin/main' -Stage 'origin-main-check')
+
+    $bridgeResult = Invoke-WslCommand -Arguments 'git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/codex_windows_bridge.ps1' -Stage 'bridge-source'
+    $bridgeText = $bridgeResult.Stdout.TrimStart([char]0xFEFF)
     if ([string]::IsNullOrWhiteSpace($bridgeText)) {
         throw 'Windows bridge source was empty.'
     }
@@ -128,15 +190,13 @@ git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/codex_windows
         throw ('Windows bridge exited during startup. ' + $detail)
     }
 
-    $run = @'
-set -euo pipefail
-export GIT_TERMINAL_PROMPT=0
-git -C /home/rensei/codex-chase/05-AI-voice fetch origin >/dev/null 2>&1 || { echo "git fetch failed."; exit 15; }
-git -C /home/rensei/codex-chase/05-AI-voice rev-parse --verify origin/main >/dev/null
-git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/run_black_codex.py | python3 - --control-repo /home/rensei/codex-chase/05-AI-voice
-'@
-    $output = @(Invoke-WslChecked $run 'black-codex-runner')
-    foreach ($line in $output) { Write-Host ([string]$line) }
+    $runnerSourceResult = Invoke-WslCommand -Arguments 'git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/run_black_codex.py' -Stage 'runner-source'
+    if ([string]::IsNullOrWhiteSpace($runnerSourceResult.Stdout)) {
+        throw 'Black Codex runner source was empty.'
+    }
+
+    $runnerResult = Invoke-WslCommand -Arguments 'python3 - --control-repo /home/rensei/codex-chase/05-AI-voice' -Stage 'black-codex-runner' -InputText $runnerSourceResult.Stdout
+    if (-not [string]::IsNullOrWhiteSpace($runnerResult.Stdout)) { Write-Host $runnerResult.Stdout.TrimEnd() }
     Write-RecoveryLog 'SUCCESS'
     Write-Host 'Black Codex recovery completed.'
     exit 0
