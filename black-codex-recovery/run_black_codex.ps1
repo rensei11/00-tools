@@ -3,6 +3,7 @@ $ErrorActionPreference = 'Stop'
 $logPath = Join-Path $env:TEMP 'rensei_black_codex_recovery_log.txt'
 $bridgePath = Join-Path $env:TEMP 'rensei_codex_windows_bridge.ps1'
 $bridgeLog = Join-Path $env:TEMP 'rensei_codex_windows_bridge.log'
+$bridgeErr = Join-Path $env:TEMP 'rensei_codex_windows_bridge_error.log'
 
 try {
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
@@ -20,14 +21,14 @@ REPO="$ROOT/05-AI-voice"
 
 if [ ! -d "$REPO/.git" ]; then
   mkdir -p "$ROOT"
-  git clone https://github.com/rensei11/05-AI-voice.git "$REPO"
+  git clone https://github.com/rensei11/05-AI-voice.git "$REPO" >/dev/null 2>&1
 fi
 
-git -C "$REPO" fetch origin
+git -C "$REPO" fetch origin >/dev/null 2>&1
 git -C "$REPO" show origin/main:tools/codex_windows_bridge.ps1
 '@
 
-    $bridgeSource = & wsl.exe -d Ubuntu -- bash -lc $prepare 2>&1
+    $bridgeSource = & wsl.exe -d Ubuntu -- bash -lc $prepare
     $rc = $LASTEXITCODE
     if ($rc -ne 0) {
         throw "Could not prepare the Windows bridge. WSL exited with code $rc."
@@ -56,7 +57,7 @@ git -C "$REPO" show origin/main:tools/codex_windows_bridge.ps1
             ('"{0}"' -f $bridgePath),
             '-IdleMinutes',
             '120'
-        ) -WindowStyle Hidden -RedirectStandardOutput $bridgeLog -RedirectStandardError $bridgeLog | Out-Null
+        ) -WindowStyle Hidden -RedirectStandardOutput $bridgeLog -RedirectStandardError $bridgeErr | Out-Null
         Start-Sleep -Seconds 2
     }
 
