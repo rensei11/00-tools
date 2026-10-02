@@ -72,19 +72,42 @@ function Resolve-ToolDir {
         }
     }
 
-    $rootDepth = ($root.TrimEnd('\') -split '\\').Count
     $matches = New-Object 'System.Collections.Generic.List[string]'
+    $queue = New-Object 'System.Collections.Generic.Queue[object]'
+    $queue.Enqueue([pscustomobject]@{ Path = $root; Depth = 0 })
 
-    foreach ($app in @(Get-ChildItem -LiteralPath $root -Filter 'app.py' -File -Recurse -ErrorAction SilentlyContinue)) {
-        $dir = $app.Directory.FullName
-        $depth = ($dir.TrimEnd('\') -split '\\').Count - $rootDepth
-        if ($depth -gt 4) {
+    while ($queue.Count -gt 0) {
+        $item = $queue.Dequeue()
+        $path = [string]$item.Path
+        $depth = [int]$item.Depth
+
+        if ($depth -gt 0 -and (Test-ToolDir $path)) {
+            if (-not $matches.Contains($path)) {
+                $matches.Add($path) | Out-Null
+            }
+        }
+
+        if ($depth -ge 4) {
             continue
         }
-        if (Test-ToolDir $dir) {
-            if (-not $matches.Contains($dir)) {
-                $matches.Add($dir) | Out-Null
+
+        foreach ($child in @(Get-ChildItem -LiteralPath $path -Directory -ErrorAction SilentlyContinue)) {
+            if ($child.Name -in @(
+                '音声',
+                '参照音声',
+                '事前計算',
+                '_temp_generation',
+                '_repair_backup',
+                '調査用データ',
+                'node_modules',
+                '.git'
+            )) {
+                continue
             }
+            $queue.Enqueue([pscustomobject]@{
+                Path = $child.FullName
+                Depth = $depth + 1
+            })
         }
     }
 
@@ -98,8 +121,10 @@ function Resolve-ToolDir {
                 Sort-Object @{
                     Expression = {
                         $score = 0
-                        if (Test-Path -LiteralPath (Join-Path $_ 'update_and_start.ps1') -PathType Leaf) { $score += 4 }
-                        if (Test-Path -LiteralPath (Join-Path $_ 'startup_update_check.ps1') -PathType Leaf) { $score += 3 }
+                        if (Test-Path -LiteralPath (Join-Path $_ 'update_and_start.ps1') -PathType Leaf) { $score += 8 }
+                        if (Test-Path -LiteralPath (Join-Path $_ 'startup_update_check.ps1') -PathType Leaf) { $score += 4 }
+                        if (Test-Path -LiteralPath (Join-Path $_ 'paths.py') -PathType Leaf) { $score += 4 }
+                        if (Test-Path -LiteralPath (Join-Path $_ 'voice_core.py') -PathType Leaf) { $score += 4 }
                         if (Test-Path -LiteralPath (Join-Path $_ 'Start Fandom Tool.cmd') -PathType Leaf) { $score += 2 }
                         if (Test-Path -LiteralPath (Join-Path $_ 'start_fandom_tool.cmd') -PathType Leaf) { $score += 1 }
                         return -$score
@@ -107,13 +132,10 @@ function Resolve-ToolDir {
                 },
                 @{ Expression = { $_.Length } }
         )
-
-        if ($ranked.Count -ge 1) {
-            return [string]$ranked[0]
-        }
+        return [string]$ranked[0]
     }
 
-    throw 'AI voice tool folder was not found under D:\AI生成ファイル\Irodori-TTS.'
+    throw 'AI voice tool folder was not found within four levels under D:\AI生成ファイル\Irodori-TTS.'
 }
 
 try {
