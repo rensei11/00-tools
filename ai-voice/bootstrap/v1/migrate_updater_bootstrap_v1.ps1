@@ -489,9 +489,38 @@ function Apply-Manifest {
             $pendingPath = $destination + '.bootstrap-update-pending'
             Copy-Item -LiteralPath $staged -Destination $pendingPath -Force
             if ($destinationExists) {
-                [System.IO.File]::Replace($pendingPath, $destination, $backup)
+                Write-Log ('REPLACE_BEGIN relative=' + $relative + ' pending=' + $pendingPath + ' destination=' + $destination + ' backup=' + $backup)
+                try {
+                    [System.IO.File]::Replace($pendingPath, $destination, $backup)
+                } catch {
+                    $replaceError = $_.Exception
+                    Write-Log (
+                        'REPLACE_ERROR relative=' + $relative +
+                        ' pending=' + $pendingPath +
+                        ' destination=' + $destination +
+                        ' backup=' + $backup +
+                        ' type=' + $replaceError.GetType().FullName +
+                        ' hresult=' + ('0x{0:X8}' -f ($replaceError.HResult -band 0xffffffff)) +
+                        ' message=' + $replaceError.Message
+                    )
+                    throw
+                }
             } else {
-                [System.IO.File]::Move($pendingPath, $destination)
+                Write-Log ('MOVE_BEGIN relative=' + $relative + ' pending=' + $pendingPath + ' destination=' + $destination)
+                try {
+                    [System.IO.File]::Move($pendingPath, $destination)
+                } catch {
+                    $moveError = $_.Exception
+                    Write-Log (
+                        'MOVE_ERROR relative=' + $relative +
+                        ' pending=' + $pendingPath +
+                        ' destination=' + $destination +
+                        ' type=' + $moveError.GetType().FullName +
+                        ' hresult=' + ('0x{0:X8}' -f ($moveError.HResult -band 0xffffffff)) +
+                        ' message=' + $moveError.Message
+                    )
+                    throw
+                }
             }
         }
 
