@@ -40,7 +40,6 @@ function Invoke-WslCommand {
     $startInfo.StandardErrorEncoding = New-Object Text.UTF8Encoding($false)
     if ($null -ne $InputText) {
         $startInfo.RedirectStandardInput = $true
-        $startInfo.StandardInputEncoding = New-Object Text.UTF8Encoding($false)
     }
 
     $process = New-Object System.Diagnostics.Process
@@ -52,7 +51,9 @@ function Invoke-WslCommand {
     $stdoutTask = $process.StandardOutput.ReadToEndAsync()
     $stderrTask = $process.StandardError.ReadToEndAsync()
     if ($null -ne $InputText) {
-        $process.StandardInput.Write($InputText)
+        $inputBytes = (New-Object Text.UTF8Encoding($false)).GetBytes($InputText)
+        $process.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length)
+        $process.StandardInput.BaseStream.Flush()
         $process.StandardInput.Close()
     }
 
