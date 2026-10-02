@@ -86,7 +86,7 @@ jobs:
           foreach ($required in @(
               'System.Diagnostics.ProcessStartInfo',
               'RedirectStandardInput',
-              'StandardInputEncoding',
+              'StandardInput.BaseStream.Write',
               'ReadToEndAsync',
               'uname -s',
               'git --version',
@@ -114,12 +114,11 @@ jobs:
         run: |
           $startInfo = New-Object System.Diagnostics.ProcessStartInfo
           $startInfo.FileName = 'powershell.exe'
-          $startInfo.Arguments = '-NoProfile -Command "Write-Output READY"'
+          $startInfo.Arguments = '-NoProfile -Command "[Console]::In.ReadToEnd()"'
           $startInfo.UseShellExecute = $false
           $startInfo.RedirectStandardInput = $true
           $startInfo.RedirectStandardOutput = $true
           $startInfo.RedirectStandardError = $true
-          $startInfo.StandardInputEncoding = New-Object Text.UTF8Encoding($false)
           $startInfo.StandardOutputEncoding = New-Object Text.UTF8Encoding($false)
           $startInfo.StandardErrorEncoding = New-Object Text.UTF8Encoding($false)
           $process = New-Object System.Diagnostics.Process
@@ -129,6 +128,9 @@ jobs:
           }
           $stdoutTask = $process.StandardOutput.ReadToEndAsync()
           $stderrTask = $process.StandardError.ReadToEndAsync()
+          $inputBytes = (New-Object Text.UTF8Encoding($false)).GetBytes("READY")
+          $process.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length)
+          $process.StandardInput.BaseStream.Flush()
           $process.StandardInput.Close()
           $process.WaitForExit()
           $stdout = $stdoutTask.Result
