@@ -14,6 +14,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p=$env:TEMP+'\rensei_black_codex_recovery.ps1';$t=$null;$e=$null;[void][Management.Automation.Language.Parser]::ParseFile($p,[ref]$t,[ref]$e);if(@($e).Count-ne 0){exit 21};$s=[IO.File]::ReadAllText($p,[Text.Encoding]::UTF8);if($s.IndexOf('Black Codex recovery completed.',[StringComparison]::Ordinal)-lt 0){exit 22}"
+if errorlevel 1 (
+  echo Recovery runner preflight failed.
+  pause
+  exit /b 1
+)
+
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%RUNNER%"
 set "RC=%ERRORLEVEL%"
 

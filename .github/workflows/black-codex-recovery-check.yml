@@ -44,7 +44,8 @@ jobs:
           foreach ($required in @(
               'run_black_codex.ps1',
               'raw.githubusercontent.com/rensei11/00-tools/main/black-codex-recovery/run_black_codex.ps1',
-              'powershell.exe -NoProfile -ExecutionPolicy Bypass -File'
+              'powershell.exe -NoProfile -ExecutionPolicy Bypass -File',
+              'Management.Automation.Language.Parser'
           )) {
               if (-not $cmd.Contains($required)) {
                   throw ('Recovery CMD is missing required canonical-runner handoff: ' + $required)
@@ -83,6 +84,11 @@ jobs:
               'rev-parse --verify origin/main',
               'inspect_update',
               'updater_candidate_test',
+              'APP_VERSION_LOCAL',
+              '_update_bootstrap_log.txt',
+              'set -euo pipefail',
+              'GIT_TERMINAL_PROMPT=0',
+              'Stopping stale managed bridge PID=',
               'ParseFile',
               'Black Codex recovery failed.'
           )) {
