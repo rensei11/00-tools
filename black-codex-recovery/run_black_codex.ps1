@@ -45,16 +45,17 @@ try {
     }
 
     $prepare = @'
-set -eu
+set -euo pipefail
+export GIT_TERMINAL_PROMPT=0
 command -v git >/dev/null 2>&1 || { echo "git was not found in WSL."; exit 10; }
 command -v python3 >/dev/null 2>&1 || { echo "python3 was not found in WSL."; exit 11; }
 command -v codex >/dev/null 2>&1 || { echo "codex was not found in WSL."; exit 12; }
 if [ ! -d /home/rensei/codex-chase/05-AI-voice/.git ]; then
   mkdir -p /home/rensei/codex-chase
-  git clone https://github.com/rensei11/05-AI-voice.git /home/rensei/codex-chase/05-AI-voice
+  git clone https://github.com/rensei11/05-AI-voice.git /home/rensei/codex-chase/05-AI-voice >/dev/null 2>&1 || { echo "git clone failed."; exit 14; }
 fi
 test "$(git -C /home/rensei/codex-chase/05-AI-voice remote get-url origin)" = "https://github.com/rensei11/05-AI-voice.git" || { echo "Unexpected Git origin."; exit 13; }
-git -C /home/rensei/codex-chase/05-AI-voice fetch origin
+git -C /home/rensei/codex-chase/05-AI-voice fetch origin >/dev/null 2>&1 || { echo "git fetch failed."; exit 15; }
 git -C /home/rensei/codex-chase/05-AI-voice rev-parse --verify origin/main >/dev/null
 git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/codex_windows_bridge.ps1
 '@
@@ -63,7 +64,7 @@ git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/codex_windows
     if ([string]::IsNullOrWhiteSpace($bridgeText)) {
         throw 'Windows bridge source was empty.'
     }
-    if ($bridgeText -notmatch 'inspect_update' -or $bridgeText -notmatch 'updater_candidate_test') {
+    if ($bridgeText -notmatch 'inspect_update' -or $bridgeText -notmatch 'updater_candidate_test' -or $bridgeText -notmatch 'APP_VERSION_LOCAL' -or $bridgeText -notmatch '_update_bootstrap_log.txt') {
         throw 'Windows bridge source is missing required updater diagnostic operations.'
     }
 
@@ -98,25 +99,30 @@ git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/codex_windows
             Select-Object -First 1
     )
 
-    if ($bridgeAlreadyRunning.Count -eq 0) {
-        Remove-Item -LiteralPath $bridgeLog, $bridgeErr -Force -ErrorAction SilentlyContinue
-        $bridgeProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+    foreach ($process in $bridgeAlreadyRunning) {
+        Write-RecoveryLog ('Stopping stale managed bridge PID=' + [string]$process.ProcessId)
+        Stop-Process -Id ([int]$process.ProcessId) -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Milliseconds 300
+
+    Remove-Item -LiteralPath $bridgeLog, $bridgeErr -Force -ErrorAction SilentlyContinue
+    $bridgeProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList @(
             '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $bridgePath), '-IdleMinutes', '120'
         ) -WindowStyle Hidden -RedirectStandardOutput $bridgeLog -RedirectStandardError $bridgeErr -PassThru
         Start-Sleep -Seconds 2
         $bridgeProcess.Refresh()
-        if ($bridgeProcess.HasExited) {
-            $detail = ''
+    if ($bridgeProcess.HasExited) {
+        $detail = ''
             if (Test-Path -LiteralPath $bridgeErr -PathType Leaf) {
                 $detail = ((Get-Content -LiteralPath $bridgeErr -Tail 40 -ErrorAction SilentlyContinue) | Out-String).Trim()
             }
-            throw ('Windows bridge exited during startup. ' + $detail)
-        }
+        throw ('Windows bridge exited during startup. ' + $detail)
     }
 
     $run = @'
-set -eu
-git -C /home/rensei/codex-chase/05-AI-voice fetch origin
+set -euo pipefail
+export GIT_TERMINAL_PROMPT=0
+git -C /home/rensei/codex-chase/05-AI-voice fetch origin >/dev/null 2>&1 || { echo "git fetch failed."; exit 15; }
 git -C /home/rensei/codex-chase/05-AI-voice rev-parse --verify origin/main >/dev/null
 git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/run_black_codex.py | python3 - --control-repo /home/rensei/codex-chase/05-AI-voice
 '@
