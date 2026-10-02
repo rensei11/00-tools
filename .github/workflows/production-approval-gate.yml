@@ -80,8 +80,10 @@ jobs:
               'start_local.ps1',
               'Start Fandom Tool.cmd',
               'start_fandom_tool.cmd',
-              '-ForceUpdate',
-              'powershell.exe -NoProfile -ExecutionPolicy Bypass -File $manualUpdate'
+              'Start-Process',
+              '& powershell.exe',
+              'Start-CurrentApp',
+              'Apply-Manifest'
           )) {
               if ($repair.Contains($forbidden)) {
                   throw ('repair script reintroduced unrelated behavior: ' + $forbidden)
