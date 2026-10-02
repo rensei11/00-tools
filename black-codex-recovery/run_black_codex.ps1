@@ -34,7 +34,33 @@ git -C "$REPO" show origin/main:tools/codex_windows_bridge.ps1
         throw "Could not prepare the Windows bridge. WSL exited with code $rc."
     }
 
-    $bridgeSource | Set-Content -LiteralPath $bridgePath -Encoding UTF8
+    $bridgeText = [string]::Join([Environment]::NewLine, @($bridgeSource))
+    $bridgeText = $bridgeText.TrimStart([char]0xFEFF)
+    [System.IO.File]::WriteAllText(
+        $bridgePath,
+        $bridgeText,
+        (New-Object System.Text.UTF8Encoding($true))
+    )
+
+    $parseTokens = $null
+    $parseErrors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile(
+        $bridgePath,
+        [ref]$parseTokens,
+        [ref]$parseErrors
+    )
+    if (@($parseErrors).Count -ne 0) {
+        throw 'Windows PowerShell 5.1 bridge preflight failed before launch.'
+    }
+
+    $bridgeBytes = [System.IO.File]::ReadAllBytes($bridgePath)
+    if (
+        $bridgeBytes.Length -ge 6 -and
+        $bridgeBytes[0] -eq 0xEF -and $bridgeBytes[1] -eq 0xBB -and $bridgeBytes[2] -eq 0xBF -and
+        $bridgeBytes[3] -eq 0xEF -and $bridgeBytes[4] -eq 0xBB -and $bridgeBytes[5] -eq 0xBF
+    ) {
+        throw 'Duplicate UTF-8 BOM detected in Windows bridge file.'
+    }
 
     $bridgeAlreadyRunning = @(
         Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
