@@ -1,279 +1,76 @@
 ﻿param(
-    [string]$SearchRoot = 'D:\AI生成ファイル\Irodori-TTS',
-    [string]$BundlePath = '',
-    [string]$ExpectedBundleHash = '0a88736b7f732feb5552efccf4adefb8e345dadf4b8d7dbf0d98ed222722476b',
-    [string]$BootstrapIndexPath = '',
-    [switch]$NoLaunch,
-    [switch]$InstallOnly
+    [string]$ToolRoot = 'D:\AI生成ファイル\Irodori-TTS\Fandom音声ツール'
 )
 
 $ErrorActionPreference = 'Stop'
-$bundleUrl = 'https://raw.githubusercontent.com/rensei11/00-tools/70feebcdace748810beabe0451a1f1efa4ae6eee/ai-voice/bootstrap/v1/bootstrap-bundle.json'
-$requiredFiles = @(
-    'Start Fandom Tool.cmd',
-    'start_fandom_tool.cmd',
-    'updater_bootstrap.ps1',
-    'startup_update_check.ps1',
-    'update_and_start.ps1'
-)
-$excludedDirectoryNames = @(
-    '音声',
-    '参照音声',
-    '事前計算',
-    '調査用データ',
-    '_backup',
-    '_repair_backup',
-    '_update_repo',
-    '_update_zip',
-    '_update_bootstrap_work',
-    '_updater_bootstrap_backup',
-    'node_modules',
-    '.git'
-)
-
-function Get-CandidateScore {
-    param([string]$Path)
-
-    if (-not (Test-Path -LiteralPath (Join-Path $Path 'app.py') -PathType Leaf)) {
-        return -1
-    }
-
-    $score = 0
-    $markers = @(
-        @('voice_core.py', 8),
-        @('conversation_mode.py', 5),
-        @('chatgpt_link.py', 5),
-        @('acquisition_core.py', 5),
-        @('paths.py', 4),
-        @('start_local.ps1', 4),
-        @('speakers.json', 3),
-        @('Start Fandom Tool.cmd', 2),
-        @('start_fandom_tool.cmd', 2),
-        @('update_and_start.ps1', 1)
-    )
-    foreach ($marker in $markers) {
-        if (Test-Path -LiteralPath (Join-Path $Path ([string]$marker[0])) -PathType Leaf) {
-            $score += [int]$marker[1]
-        }
-    }
-    return $score
-}
-
-function Resolve-ToolRoot {
-    param([string]$Root)
-
-    $fullRoot = [System.IO.Path]::GetFullPath($Root)
-    if (-not (Test-Path -LiteralPath $fullRoot -PathType Container)) {
-        throw ('Search root was not found: ' + $fullRoot)
-    }
-
-    $candidates = New-Object 'System.Collections.Generic.List[object]'
-    $queue = New-Object 'System.Collections.Generic.Queue[object]'
-    $queue.Enqueue([pscustomobject]@{ Path = $fullRoot; Depth = 0 })
-
-    while ($queue.Count -gt 0) {
-        $item = $queue.Dequeue()
-        $path = [string]$item.Path
-        $depth = [int]$item.Depth
-
-        $score = Get-CandidateScore $path
-        if ($score -ge 10) {
-            $candidates.Add([pscustomobject]@{ Path = $path; Score = $score }) | Out-Null
-        }
-
-        if ($depth -ge 6) {
-            continue
-        }
-
-        foreach ($child in @(Get-ChildItem -LiteralPath $path -Directory -ErrorAction SilentlyContinue)) {
-            if ($excludedDirectoryNames -contains $child.Name) {
-                continue
-            }
-            $queue.Enqueue([pscustomobject]@{ Path = $child.FullName; Depth = $depth + 1 })
-        }
-    }
-
-    if ($candidates.Count -eq 0) {
-        throw ('AI voice tool program folder was not found under: ' + $fullRoot)
-    }
-
-    $ranked = @($candidates | Sort-Object @{ Expression = { -[int]$_.Score } }, @{ Expression = { ([string]$_.Path).Length } }, @{ Expression = { [string]$_.Path } })
-
-    if ($ranked.Count -gt 1 -and [int]$ranked[0].Score -eq [int]$ranked[1].Score) {
-        $paths = @($ranked | Select-Object -First 5 | ForEach-Object { [string]$_.Path })
-        throw ('Multiple equally strong AI voice tool folders were found: ' + ($paths -join ' | '))
-    }
-
-    return [string]$ranked[0].Path
-}
-
-function Get-Sha256 {
-    param([string]$Path)
-    return ((Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash).ToLowerInvariant()
-}
-
-function Write-StableFile {
-    param([string]$Path, [string]$Content)
-
-    $contentWithoutBom = $Content.TrimStart([char]0xFEFF)
-    $extension = [System.IO.Path]::GetExtension($Path).ToLowerInvariant()
-
-    if ($extension -eq '.cmd' -or $extension -eq '.bat') {
-        foreach ($char in $contentWithoutBom.ToCharArray()) {
-            if ([int][char]$char -gt 127) {
-                throw ('Non-ASCII text in batch launcher: ' + [System.IO.Path]::GetFileName($Path))
-            }
-        }
-        [System.IO.File]::WriteAllText($Path, $contentWithoutBom, [System.Text.Encoding]::ASCII)
-        return
-    }
-
-    if ($extension -eq '.ps1') {
-        $utf8Bom = New-Object System.Text.UTF8Encoding($true)
-        [System.IO.File]::WriteAllText($Path, $contentWithoutBom, $utf8Bom)
-        return
-    }
-
-    throw ('Unsupported stable updater file type: ' + $Path)
-}
+$sourceUrl = 'https://raw.githubusercontent.com/rensei11/05-AI-voice/main/update_and_start.ps1'
+$destination = Join-Path $ToolRoot 'update_and_start.ps1'
+$pending = Join-Path $ToolRoot '_update_and_start.repair-pending.ps1'
 
 function Assert-PowerShellParses {
     param([string]$Path)
-
     $tokens = $null
     $errors = $null
-    [System.Management.Automation.Language.Parser]::ParseFile($Path, [ref]$tokens, [ref]$errors) | Out-Null
-    if ($errors.Count -gt 0) {
-        throw ('PowerShell parse failed after bootstrap migration: ' + $errors[0].Message)
+    [System.Management.Automation.Language.Parser]::ParseFile(
+        $Path,
+        [ref]$tokens,
+        [ref]$errors
+    ) | Out-Null
+    if (@($errors).Count -ne 0) {
+        throw ('PowerShell parse failed: ' + $errors[0].Message)
     }
 }
 
-$toolRoot = $null
-$logPath = $null
-$bundleTemp = $null
-
 try {
-    Write-Host 'MIGRATION_STAGE resolve-tool-root'
-    $toolRoot = Resolve-ToolRoot $SearchRoot
-    Write-Host ('MIGRATION_STAGE tool-root=' + $toolRoot)
-    $logPath = Join-Path $toolRoot '_updater_bootstrap_migration.log'
-    [System.IO.File]::WriteAllText($logPath, '', (New-Object System.Text.UTF8Encoding($false)))
-
-    Add-Content -LiteralPath $logPath -Value 'STAGE=prepare-bundle' -Encoding UTF8
-    Write-Host 'MIGRATION_STAGE prepare-bundle'
-    $bundleTemp = Join-Path $toolRoot '_updater_bootstrap_bundle_v1.json'
-    if ([string]::IsNullOrWhiteSpace($BundlePath)) {
-        Invoke-WebRequest -Uri $bundleUrl -OutFile $bundleTemp -UseBasicParsing -TimeoutSec 60
-    } else {
-        $source = [System.IO.Path]::GetFullPath($BundlePath)
-        if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
-            throw ('Bootstrap bundle was not found: ' + $source)
-        }
-        Copy-Item -LiteralPath $source -Destination $bundleTemp -Force
+    if (-not (Test-Path -LiteralPath $ToolRoot -PathType Container)) {
+        throw ('AI voice tool folder was not found: ' + $ToolRoot)
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $ToolRoot 'app.py') -PathType Leaf)) {
+        throw ('AI voice app.py was not found in: ' + $ToolRoot)
     }
 
-    Add-Content -LiteralPath $logPath -Value 'STAGE=verify-bundle' -Encoding UTF8
-    Write-Host 'MIGRATION_STAGE verify-bundle'
-    $actualHash = Get-Sha256 $bundleTemp
-    if ($actualHash -ne $ExpectedBundleHash.ToLowerInvariant()) {
-        throw ('Bootstrap bundle SHA-256 mismatch. expected=' + $ExpectedBundleHash + ' actual=' + $actualHash)
-    }
+    Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
 
-    $bundle = [System.IO.File]::ReadAllText($bundleTemp, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
-    if ([int]$bundle.schema -ne 1 -or [string]$bundle.version -ne 'bootstrap-v1') {
-        throw 'Unsupported bootstrap bundle.'
+    $headers = @{
+        'User-Agent' = 'Rensei-AI-Voice-Repair'
+        'Cache-Control' = 'no-cache'
+        'Pragma' = 'no-cache'
     }
+    Invoke-WebRequest -Uri $sourceUrl -OutFile $pending -UseBasicParsing -Headers $headers -TimeoutSec 30
 
-    foreach ($name in $requiredFiles) {
-        if ($null -eq $bundle.files.PSObject.Properties[$name]) {
-            throw ('Bootstrap bundle is missing: ' + $name)
+    Assert-PowerShellParses $pending
+    $text = [System.IO.File]::ReadAllText($pending, [System.Text.Encoding]::UTF8)
+    foreach ($required in @(
+        'Rensei-AI-Voice-Update-Button',
+        'raw.githubusercontent.com/rensei11/05-AI-voice/main/updater_bootstrap.ps1',
+        '-ForceUpdate',
+        '-NoBrowser'
+    )) {
+        if ($text.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
+            throw ('Downloaded update button script is missing: ' + $required)
         }
     }
-
-    Add-Content -LiteralPath $logPath -Value 'STAGE=install-stable-shell' -Encoding UTF8
-    Write-Host 'MIGRATION_STAGE install-stable-shell'
-    $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
-    $backupRoot = Join-Path $toolRoot ('_updater_bootstrap_backup\migration-v1-' + $stamp)
-    [System.IO.Directory]::CreateDirectory($backupRoot) | Out-Null
-
-    foreach ($name in $requiredFiles) {
-        $destination = Join-Path $toolRoot $name
-        if (Test-Path -LiteralPath $destination -PathType Leaf) {
-            Copy-Item -LiteralPath $destination -Destination (Join-Path $backupRoot $name) -Force
-        }
-        Write-StableFile -Path $destination -Content ([string]$bundle.files.PSObject.Properties[$name].Value)
+    if ($text.IndexOf("Join-Path `$PSScriptRoot 'updater_bootstrap.ps1'", [StringComparison]::Ordinal) -ge 0) {
+        throw 'Downloaded update button script still depends on the local updater bootstrap.'
     }
 
-    Add-Content -LiteralPath $logPath -Value 'STAGE=parse-stable-shell' -Encoding UTF8
-    Write-Host 'MIGRATION_STAGE parse-stable-shell'
-    Assert-PowerShellParses (Join-Path $toolRoot 'updater_bootstrap.ps1')
-    Assert-PowerShellParses (Join-Path $toolRoot 'startup_update_check.ps1')
-    Assert-PowerShellParses (Join-Path $toolRoot 'update_and_start.ps1')
-
-    if ($InstallOnly) {
-        Add-Content -LiteralPath $logPath -Value 'STAGE=install-only-complete' -Encoding UTF8
-        Write-Host 'MIGRATION_STAGE install-only-complete'
-        @(
-            'MIGRATION_SUCCESS'
-            ('TOOL_ROOT=' + $toolRoot)
-            ('BACKUP=' + $backupRoot)
-            'MODE=INSTALL_ONLY'
-        ) | Add-Content -LiteralPath $logPath -Encoding UTF8
-        Write-Host 'AI voice updater shell installation completed.'
-        exit 0
+    $sourceHash = (Get-FileHash -LiteralPath $pending -Algorithm SHA256).Hash
+    Copy-Item -LiteralPath $pending -Destination $destination -Force
+    Assert-PowerShellParses $destination
+    $installedHash = (Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash
+    if ($installedHash -ne $sourceHash) {
+        throw 'Installed update button script hash does not match downloaded source.'
     }
 
-    Add-Content -LiteralPath $logPath -Value 'STAGE=run-update' -Encoding UTF8
-    Write-Host 'MIGRATION_STAGE run-update'
-
-    if ($NoLaunch -or -not [string]::IsNullOrWhiteSpace($BootstrapIndexPath)) {
-        $bootstrap = Join-Path $toolRoot 'updater_bootstrap.ps1'
-        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-ForceUpdate')
-        if ($NoLaunch) {
-            $arguments += '-NoLaunch'
-        }
-        if (-not [string]::IsNullOrWhiteSpace($BootstrapIndexPath)) {
-            $arguments += '-IndexPath'
-            $arguments += [System.IO.Path]::GetFullPath($BootstrapIndexPath)
-        }
-        & powershell.exe @arguments
-    } else {
-        $manualUpdate = Join-Path $toolRoot 'update_and_start.ps1'
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $manualUpdate
-    }
-
-    if ($LASTEXITCODE -ne 0) {
-        throw ('Updater recovery returned exit code ' + $LASTEXITCODE)
-    }
-    Add-Content -LiteralPath $logPath -Value 'STAGE=update-complete' -Encoding UTF8
-    Write-Host 'MIGRATION_STAGE update-complete'
-
-    @(
-        'MIGRATION_SUCCESS'
-        ('TOOL_ROOT=' + $toolRoot)
-        ('BACKUP=' + $backupRoot)
-    ) | Add-Content -LiteralPath $logPath -Encoding UTF8
-
-    Write-Host 'AI voice updater bootstrap migration completed.'
+    Write-Host 'UPDATE_BUTTON_REPAIR=SUCCESS'
+    Write-Host ('INSTALLED=' + $destination)
     exit 0
 }
 catch {
-    $message = $_.Exception.Message
-    if ([string]::IsNullOrWhiteSpace($logPath)) {
-        $fallback = [System.IO.Path]::GetFullPath($SearchRoot)
-        if (Test-Path -LiteralPath $fallback -PathType Container) {
-            $logPath = Join-Path $fallback '_updater_bootstrap_migration.log'
-        }
-    }
-    if (-not [string]::IsNullOrWhiteSpace($logPath)) {
-        @('MIGRATION_FAILED', $message) | Set-Content -LiteralPath $logPath -Encoding UTF8
-    }
-    Write-Host 'AI voice updater bootstrap migration failed.'
-    Write-Host $message
+    Write-Host 'UPDATE_BUTTON_REPAIR=FAILED'
+    Write-Host $_.Exception.Message
     exit 1
 }
 finally {
-    if ($bundleTemp -and (Test-Path -LiteralPath $bundleTemp -PathType Leaf)) {
-        Remove-Item -LiteralPath $bundleTemp -Force -ErrorAction SilentlyContinue
-    }
+    Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
 }
