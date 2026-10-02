@@ -13,7 +13,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-powershell.exe -NoProfile -File "%PS1%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%PS1%"
 set "RC=%ERRORLEVEL%"
 
 if not "%RC%"=="0" (
