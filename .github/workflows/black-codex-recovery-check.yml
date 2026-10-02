@@ -83,6 +83,10 @@ jobs:
               }
           }
 
+          if ($ps1.Contains("Invoke-WslCommand -Arguments 'codex --version'")) {
+              throw 'Recovery PowerShell must not probe Codex outside the established login-environment runner.'
+          }
+
           foreach ($required in @(
               'System.Diagnostics.ProcessStartInfo',
               'RedirectStandardInput',
@@ -91,7 +95,6 @@ jobs:
               'uname -s',
               'git --version',
               'python3 --version',
-              'codex --version',
               '/home/rensei/codex-chase/05-AI-voice',
               'env GIT_TERMINAL_PROMPT=0 git',
               'rev-parse --verify origin/main',
