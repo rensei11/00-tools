@@ -15,3 +15,113 @@ jobs:
     steps:
       - name: Approval received
         run: echo "Production approval granted."
+
+
+  updater-repair-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate minimal updater repair
+        shell: powershell
+        run: |
+          $cmdPath = 'repair-fandom-start.cmd'
+          $repairPath = 'ai-voice/bootstrap/v1/migrate_updater_bootstrap_v1.ps1'
+
+          $cmdBytes = [IO.File]::ReadAllBytes($cmdPath)
+          if (@($cmdBytes | Where-Object { $_ -gt 127 }).Count -ne 0) {
+              throw 'repair-fandom-start.cmd must remain ASCII-only.'
+          }
+
+          $cmd = [IO.File]::ReadAllText($cmdPath, [Text.Encoding]::ASCII)
+          foreach ($required in @(
+              'raw.githubusercontent.com/rensei11/00-tools/main/ai-voice/bootstrap/v1/migrate_updater_bootstrap_v1.ps1',
+              'powershell.exe -NoProfile -ExecutionPolicy Bypass -File'
+          )) {
+              if (-not $cmd.Contains($required)) {
+                  throw ('repair launcher is missing: ' + $required)
+              }
+          }
+          foreach ($forbidden in @(
+              'bootstrap-bundle.json',
+              'updater_bootstrap.ps1 -ForceUpdate',
+              'start_fandom_tool.cmd'
+          )) {
+              if ($cmd.Contains($forbidden)) {
+                  throw ('repair launcher reintroduced old behavior: ' + $forbidden)
+              }
+          }
+
+          $tokens = $null
+          $errors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $repairPath),
+              [ref]$tokens,
+              [ref]$errors
+          )
+          if (@($errors).Count -ne 0) {
+              throw ('repair PowerShell parse failed: ' + $errors[0].Message)
+          }
+
+          $repair = [IO.File]::ReadAllText($repairPath, [Text.Encoding]::UTF8)
+          foreach ($required in @(
+              'update_and_start.ps1',
+              'UPDATE_BUTTON_REPAIR=SUCCESS',
+              'Get-FileHash',
+              'Copy-Item'
+          )) {
+              if (-not $repair.Contains($required)) {
+                  throw ('repair script is missing: ' + $required)
+              }
+          }
+          foreach ($forbidden in @(
+              'bootstrap-bundle.json',
+              "Join-Path `$PSScriptRoot 'updater_bootstrap.ps1'",
+              'start_local.ps1',
+              'Start Fandom Tool.cmd',
+              'start_fandom_tool.cmd',
+              'Start-Process',
+              '& powershell.exe',
+              'Start-CurrentApp',
+              'Apply-Manifest'
+          )) {
+              if ($repair.Contains($forbidden)) {
+                  throw ('repair script reintroduced unrelated behavior: ' + $forbidden)
+              }
+          }
+
+          $sandbox = Join-Path $env:RUNNER_TEMP 'ai-voice-repair-test'
+          New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $sandbox 'app.py') -Value 'APP_VERSION = "test"' -Encoding ASCII
+          Set-Content -LiteralPath (Join-Path $sandbox 'update_and_start.ps1') -Value 'OLD_CONTENT' -Encoding ASCII
+          $appHashBefore = (Get-FileHash -LiteralPath (Join-Path $sandbox 'app.py') -Algorithm SHA256).Hash
+
+          $source = Join-Path $env:RUNNER_TEMP 'fixture-update_and_start.ps1'
+          @'
+          $ErrorActionPreference = 'Stop'
+          $headers = @{ 'User-Agent' = 'Rensei-AI-Voice-Update-Button' }
+          $sourceUrl = 'https://raw.githubusercontent.com/rensei11/05-AI-voice/main/updater_bootstrap.ps1'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $sourceUrl -ForceUpdate -NoBrowser
+          '@ | Set-Content -LiteralPath $source -Encoding ASCII
+
+          $repairText = Get-Content -LiteralPath $repairPath -Raw
+          $repairText = $repairText.Replace(
+              "https://raw.githubusercontent.com/rensei11/05-AI-voice/main/update_and_start.ps1",
+              ('file:///' + ($source -replace '\\','/'))
+          )
+          $testRepair = Join-Path $env:RUNNER_TEMP 'repair-test.ps1'
+          [IO.File]::WriteAllText($testRepair, $repairText, (New-Object Text.UTF8Encoding($true)))
+
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $testRepair -ToolRoot $sandbox
+          if ($LASTEXITCODE -ne 0) {
+              throw ('minimal updater repair failed with exit code ' + $LASTEXITCODE)
+          }
+
+          $installed = Get-Content -LiteralPath (Join-Path $sandbox 'update_and_start.ps1') -Raw
+          if ($installed -notmatch 'Rensei-AI-Voice-Update-Button') {
+              throw 'update_and_start.ps1 was not replaced.'
+          }
+          $appHashAfter = (Get-FileHash -LiteralPath (Join-Path $sandbox 'app.py') -Algorithm SHA256).Hash
+          if ($appHashAfter -ne $appHashBefore) {
+              throw 'repair modified app.py.'
+          }

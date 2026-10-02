@@ -1,44 +1,30 @@
 @echo off
 setlocal EnableExtensions
 
-set "SCRIPT=%TEMP%\rensei_ai_voice_updater_migration.ps1"
-set "LOG=%TEMP%\rensei_ai_voice_updater_migration_entry.log"
-set "URL=https://raw.githubusercontent.com/rensei11/00-tools/e20448b9460e8b6ad8307c84ac62d685484be1d0/ai-voice/bootstrap/v1/migrate_updater_bootstrap_v1.ps1"
+set "SCRIPT=%TEMP%\rensei_ai_voice_update_button_repair.ps1"
+set "URL=https://raw.githubusercontent.com/rensei11/00-tools/main/ai-voice/bootstrap/v1/migrate_updater_bootstrap_v1.ps1"
 
-> "%LOG%" echo AI voice updater recovery started.
+del /q "%SCRIPT%" >nul 2>nul
 
-where powershell.exe >nul 2>&1
-if errorlevel 1 goto no_powershell
+echo AI VOICE UPDATE BUTTON REPAIR
+echo Downloading the current repair script...
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; Invoke-WebRequest -UseBasicParsing -Uri '%URL%' -OutFile '%SCRIPT%'" >>"%LOG%" 2>&1
-if errorlevel 1 goto download_failed
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;Invoke-WebRequest -UseBasicParsing -Uri '%URL%' -OutFile '%SCRIPT%'"
+if errorlevel 1 goto failed
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" -InstallOnly >>"%LOG%" 2>&1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%"
 set "RC=%ERRORLEVEL%"
-if not "%RC%"=="0" goto migration_failed
+del /q "%SCRIPT%" >nul 2>nul
 
-del /q "%SCRIPT%" >nul 2>&1
-echo AI voice updater shell repair completed.
-echo Log: %LOG%
+if not "%RC%"=="0" goto failed
+
+echo.
+echo Update button repair completed.
+pause
 exit /b 0
 
-:no_powershell
->>"%LOG%" echo ERROR: powershell.exe was not found.
-if exist "%LOG%" type "%LOG%"
-echo See log: %LOG%
+:failed
+echo.
+echo Update button repair failed.
 pause
 exit /b 1
-
-:download_failed
->>"%LOG%" echo ERROR: updater recovery download failed.
-if exist "%LOG%" type "%LOG%"
-echo See log: %LOG%
-pause
-exit /b 1
-
-:migration_failed
->>"%LOG%" echo ERROR: updater recovery returned exit code %RC%.
-if exist "%LOG%" type "%LOG%"
-echo See log: %LOG%
-pause
-exit /b %RC%
