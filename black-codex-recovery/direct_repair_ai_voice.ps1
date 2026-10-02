@@ -31,26 +31,89 @@ function Write-TextFile {
     [IO.File]::WriteAllText($Path, $Content, $utf8NoBom)
 }
 
-function Resolve-ToolDir {
-    $candidates = @(
-        'D:\AI生成ファイル\Irodori-TTS\Fandom音声ツール',
-        'D:\AI生成ファイル\Irodori-TTS'
+function Test-ToolDir {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath (Join-Path $Path 'app.py') -PathType Leaf)) {
+        return $false
+    }
+
+    $markers = @(
+        'start_local.ps1',
+        'startup_update_check.ps1',
+        'update_and_start.ps1',
+        'Start Fandom Tool.cmd',
+        'start_fandom_tool.cmd'
     )
 
-    foreach ($candidate in $candidates) {
-        if (
-            (Test-Path -LiteralPath (Join-Path $candidate 'app.py') -PathType Leaf) -and
-            (
-                (Test-Path -LiteralPath (Join-Path $candidate 'start_local.ps1') -PathType Leaf) -or
-                (Test-Path -LiteralPath (Join-Path $candidate 'Start Fandom Tool.cmd') -PathType Leaf) -or
-                (Test-Path -LiteralPath (Join-Path $candidate 'start_fandom_tool.cmd') -PathType Leaf)
-            )
-        ) {
+    foreach ($marker in $markers) {
+        if (Test-Path -LiteralPath (Join-Path $Path $marker) -PathType Leaf) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
+function Resolve-ToolDir {
+    $root = 'D:\AI生成ファイル\Irodori-TTS'
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) {
+        throw 'D:\AI生成ファイル\Irodori-TTS was not found.'
+    }
+
+    $preferred = @(
+        (Join-Path $root 'Fandom音声ツール'),
+        $root
+    )
+
+    foreach ($candidate in $preferred) {
+        if (Test-ToolDir $candidate) {
             return $candidate
         }
     }
 
-    throw 'AI voice tool folder was not found in the known D-drive locations.'
+    $rootDepth = ($root.TrimEnd('\') -split '\\').Count
+    $matches = New-Object 'System.Collections.Generic.List[string]'
+
+    foreach ($app in @(Get-ChildItem -LiteralPath $root -Filter 'app.py' -File -Recurse -ErrorAction SilentlyContinue)) {
+        $dir = $app.Directory.FullName
+        $depth = ($dir.TrimEnd('\') -split '\\').Count - $rootDepth
+        if ($depth -gt 4) {
+            continue
+        }
+        if (Test-ToolDir $dir) {
+            if (-not $matches.Contains($dir)) {
+                $matches.Add($dir) | Out-Null
+            }
+        }
+    }
+
+    if ($matches.Count -eq 1) {
+        return $matches[0]
+    }
+
+    if ($matches.Count -gt 1) {
+        $ranked = @(
+            $matches |
+                Sort-Object @{
+                    Expression = {
+                        $score = 0
+                        if (Test-Path -LiteralPath (Join-Path $_ 'update_and_start.ps1') -PathType Leaf) { $score += 4 }
+                        if (Test-Path -LiteralPath (Join-Path $_ 'startup_update_check.ps1') -PathType Leaf) { $score += 3 }
+                        if (Test-Path -LiteralPath (Join-Path $_ 'Start Fandom Tool.cmd') -PathType Leaf) { $score += 2 }
+                        if (Test-Path -LiteralPath (Join-Path $_ 'start_fandom_tool.cmd') -PathType Leaf) { $score += 1 }
+                        return -$score
+                    }
+                },
+                @{ Expression = { $_.Length } }
+        )
+
+        if ($ranked.Count -ge 1) {
+            return [string]$ranked[0]
+        }
+    }
+
+    throw 'AI voice tool folder was not found under D:\AI生成ファイル\Irodori-TTS.'
 }
 
 try {
