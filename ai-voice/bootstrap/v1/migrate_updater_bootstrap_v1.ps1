@@ -1,13 +1,13 @@
 ﻿param(
     [string]$SearchRoot = 'D:\AI生成ファイル\Irodori-TTS',
     [string]$BundlePath = '',
-    [string]$ExpectedBundleHash = 'd66151ec1c786ae14682b8a8b5dd5a6b9e389cf991f0a62f90b14872fa521874',
+    [string]$ExpectedBundleHash = '0a88736b7f732feb5552efccf4adefb8e345dadf4b8d7dbf0d98ed222722476b',
     [string]$BootstrapIndexPath = '',
     [switch]$NoLaunch
 )
 
 $ErrorActionPreference = 'Stop'
-$bundleUrl = 'https://raw.githubusercontent.com/rensei11/00-tools/5a9032a3f4921fab95d7b0db68dec5ba58b8a54a/ai-voice/bootstrap/v1/bootstrap-bundle.json'
+$bundleUrl = 'https://raw.githubusercontent.com/rensei11/00-tools/70feebcdace748810beabe0451a1f1efa4ae6eee/ai-voice/bootstrap/v1/bootstrap-bundle.json'
 $requiredFiles = @(
     'Start Fandom Tool.cmd',
     'start_fandom_tool.cmd',
@@ -209,24 +209,30 @@ try {
     Assert-PowerShellParses (Join-Path $toolRoot 'startup_update_check.ps1')
     Assert-PowerShellParses (Join-Path $toolRoot 'update_and_start.ps1')
 
-    Add-Content -LiteralPath $logPath -Value 'STAGE=run-bootstrap' -Encoding UTF8
-    Write-Host 'MIGRATION_STAGE run-bootstrap'
-    $bootstrap = Join-Path $toolRoot 'updater_bootstrap.ps1'
-    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-ForceUpdate')
-    if ($NoLaunch) {
-        $arguments += '-NoLaunch'
-    }
-    if (-not [string]::IsNullOrWhiteSpace($BootstrapIndexPath)) {
-        $arguments += '-IndexPath'
-        $arguments += [System.IO.Path]::GetFullPath($BootstrapIndexPath)
+    Add-Content -LiteralPath $logPath -Value 'STAGE=run-update' -Encoding UTF8
+    Write-Host 'MIGRATION_STAGE run-update'
+
+    if ($NoLaunch -or -not [string]::IsNullOrWhiteSpace($BootstrapIndexPath)) {
+        $bootstrap = Join-Path $toolRoot 'updater_bootstrap.ps1'
+        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $bootstrap, '-ForceUpdate')
+        if ($NoLaunch) {
+            $arguments += '-NoLaunch'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($BootstrapIndexPath)) {
+            $arguments += '-IndexPath'
+            $arguments += [System.IO.Path]::GetFullPath($BootstrapIndexPath)
+        }
+        & powershell.exe @arguments
+    } else {
+        $manualUpdate = Join-Path $toolRoot 'update_and_start.ps1'
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $manualUpdate
     }
 
-    & powershell.exe @arguments
     if ($LASTEXITCODE -ne 0) {
-        throw ('Independent updater bootstrap returned exit code ' + $LASTEXITCODE)
+        throw ('Updater recovery returned exit code ' + $LASTEXITCODE)
     }
-    Add-Content -LiteralPath $logPath -Value 'STAGE=bootstrap-complete' -Encoding UTF8
-    Write-Host 'MIGRATION_STAGE bootstrap-complete'
+    Add-Content -LiteralPath $logPath -Value 'STAGE=update-complete' -Encoding UTF8
+    Write-Host 'MIGRATION_STAGE update-complete'
 
     @(
         'MIGRATION_SUCCESS'
