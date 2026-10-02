@@ -14,21 +14,80 @@ function Write-RecoveryLog {
     )
 }
 
-function Invoke-WslChecked {
-    param([string]$Script, [string]$Stage)
-    $output = @(& wsl.exe -d Ubuntu -- bash -lc $Script 2>&1)
-    $rc = $LASTEXITCODE
-    foreach ($line in $output) {
-        Write-RecoveryLog ($Stage + ': ' + [string]$line)
+function Invoke-WslCommand {
+    param(
+        [string]$Arguments,
+        [string]$Stage,
+        [AllowNull()][string]$InputText = $null,
+        [switch]$AllowFailure
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Arguments)) {
+        throw ($Stage + ': empty WSL command.')
     }
-    if ($rc -ne 0) {
-        $tail = (($output | Select-Object -Last 20) | Out-String).Trim()
-        if ([string]::IsNullOrWhiteSpace($tail)) {
-            throw ($Stage + ' failed with exit code ' + $rc + '.')
+    if ($Arguments.IndexOf([char]13) -ge 0 -or $Arguments.IndexOf([char]10) -ge 0 -or $Arguments.Contains('"')) {
+        throw ($Stage + ': unsafe WSL argument string.')
+    }
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = 'wsl.exe'
+    $startInfo.Arguments = '-d Ubuntu -- ' + $Arguments
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
+    $startInfo.StandardOutputEncoding = New-Object Text.UTF8Encoding($false)
+    $startInfo.StandardErrorEncoding = New-Object Text.UTF8Encoding($false)
+    if ($null -ne $InputText) {
+        $startInfo.RedirectStandardInput = $true
+        $startInfo.StandardInputEncoding = New-Object Text.UTF8Encoding($false)
+    }
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw ($Stage + ': wsl.exe did not start.')
+    }
+
+    $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+    $stderrTask = $process.StandardError.ReadToEndAsync()
+    if ($null -ne $InputText) {
+        $process.StandardInput.Write($InputText)
+        $process.StandardInput.Close()
+    }
+
+    $process.WaitForExit()
+    $stdout = $stdoutTask.Result
+    $stderr = $stderrTask.Result
+    $exitCode = $process.ExitCode
+    $process.Dispose()
+
+    foreach ($line in @($stdout, $stderr)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+            foreach ($part in ([string]$line -split '\r?\n')) {
+                if (-not [string]::IsNullOrWhiteSpace($part)) {
+                    Write-RecoveryLog ($Stage + ': ' + $part)
+                }
+            }
         }
-        throw ($Stage + ' failed with exit code ' + $rc + '. ' + $tail)
     }
-    return @($output)
+
+    if ($exitCode -ne 0 -and -not $AllowFailure) {
+        $detail = $stderr.Trim()
+        if ([string]::IsNullOrWhiteSpace($detail)) {
+            $detail = $stdout.Trim()
+        }
+        if ([string]::IsNullOrWhiteSpace($detail)) {
+            throw ($Stage + ' failed with exit code ' + $exitCode + '.')
+        }
+        throw ($Stage + ' failed with exit code ' + $exitCode + '. ' + $detail)
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Stdout = $stdout
+        Stderr = $stderr
+    }
 }
 
 try {
