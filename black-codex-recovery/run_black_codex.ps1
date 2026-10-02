@@ -19,12 +19,15 @@ function Invoke-WslCommand {
         [string]$Arguments,
         [string]$Stage,
         [AllowNull()][string]$InputText = $null,
-        [switch]$AllowFailure
+        [switch]$AllowFailure,
+        [int]$TimeoutSeconds = 120
     )
 
     if ([string]::IsNullOrWhiteSpace($Arguments)) {
         throw ($Stage + ': empty WSL command.')
     }
+    Write-Host ('[Black Codex] ' + $Stage + '...')
+    Write-RecoveryLog ($Stage + ': START')
     if ($Arguments.IndexOf([char]13) -ge 0 -or $Arguments.IndexOf([char]10) -ge 0 -or $Arguments.Contains('"')) {
         throw ($Stage + ': unsafe WSL argument string.')
     }
@@ -57,7 +60,11 @@ function Invoke-WslCommand {
         $process.StandardInput.Close()
     }
 
-    $process.WaitForExit()
+    if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
+        try { $process.Kill() } catch {}
+        $process.WaitForExit()
+        throw ($Stage + ' timed out after ' + $TimeoutSeconds + ' seconds.')
+    }
     $stdout = $stdoutTask.Result
     $stderr = $stderrTask.Result
     $exitCode = $process.ExitCode
@@ -71,6 +78,11 @@ function Invoke-WslCommand {
                 }
             }
         }
+    }
+
+    Write-RecoveryLog ($Stage + ': EXIT=' + $exitCode)
+    if ($exitCode -eq 0) {
+        Write-Host ('[Black Codex] ' + $Stage + ': OK')
     }
 
     if ($exitCode -ne 0 -and -not $AllowFailure) {
@@ -89,6 +101,57 @@ function Invoke-WslCommand {
         Stdout = $stdout
         Stderr = $stderr
     }
+}
+
+function Invoke-WslStreamingCommand {
+    param(
+        [string]$Arguments,
+        [string]$Stage,
+        [AllowNull()][string]$InputText = $null
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Arguments)) {
+        throw ($Stage + ': empty WSL command.')
+    }
+    if ($Arguments.IndexOf([char]13) -ge 0 -or $Arguments.IndexOf([char]10) -ge 0 -or $Arguments.Contains('"')) {
+        throw ($Stage + ': unsafe WSL argument string.')
+    }
+
+    Write-Host ('[Black Codex] ' + $Stage + '...')
+    Write-RecoveryLog ($Stage + ': START')
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = 'wsl.exe'
+    $startInfo.Arguments = '-d Ubuntu -- ' + $Arguments
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $false
+    if ($null -ne $InputText) {
+        $startInfo.RedirectStandardInput = $true
+    }
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $startInfo
+    if (-not $process.Start()) {
+        throw ($Stage + ': wsl.exe did not start.')
+    }
+
+    if ($null -ne $InputText) {
+        $inputBytes = (New-Object Text.UTF8Encoding($false)).GetBytes($InputText)
+        $process.StandardInput.BaseStream.Write($inputBytes, 0, $inputBytes.Length)
+        $process.StandardInput.BaseStream.Flush()
+        $process.StandardInput.Close()
+    }
+
+    $process.WaitForExit()
+    $exitCode = $process.ExitCode
+    $process.Dispose()
+    Write-RecoveryLog ($Stage + ': EXIT=' + $exitCode)
+
+    if ($exitCode -ne 0) {
+        throw ($Stage + ' failed with exit code ' + $exitCode + '.')
+    }
+
+    Write-Host ('[Black Codex] ' + $Stage + ': OK')
 }
 
 try {
@@ -194,8 +257,7 @@ try {
         throw 'Black Codex runner source was empty.'
     }
 
-    $runnerResult = Invoke-WslCommand -Arguments 'python3 - --control-repo /home/rensei/codex-chase/05-AI-voice' -Stage 'black-codex-runner' -InputText $runnerSourceResult.Stdout
-    if (-not [string]::IsNullOrWhiteSpace($runnerResult.Stdout)) { Write-Host $runnerResult.Stdout.TrimEnd() }
+    [void](Invoke-WslStreamingCommand -Arguments 'env PYTHONUNBUFFERED=1 python3 - --control-repo /home/rensei/codex-chase/05-AI-voice' -Stage 'black-codex-runner' -InputText $runnerSourceResult.Stdout)
     Write-RecoveryLog 'SUCCESS'
     Write-Host 'Black Codex recovery completed.'
     exit 0
