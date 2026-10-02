@@ -95,8 +95,7 @@ git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/codex_windows
             Where-Object {
                 -not [string]::IsNullOrWhiteSpace([string]$_.CommandLine) -and
                 ([string]$_.CommandLine).IndexOf('rensei_codex_windows_bridge.ps1', [StringComparison]::OrdinalIgnoreCase) -ge 0
-            } |
-            Select-Object -First 1
+            }
     )
 
     foreach ($process in $bridgeAlreadyRunning) {
@@ -107,15 +106,25 @@ git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/codex_windows
 
     Remove-Item -LiteralPath $bridgeLog, $bridgeErr -Force -ErrorAction SilentlyContinue
     $bridgeProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList @(
-            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $bridgePath), '-IdleMinutes', '120'
-        ) -WindowStyle Hidden -RedirectStandardOutput $bridgeLog -RedirectStandardError $bridgeErr -PassThru
-        Start-Sleep -Seconds 2
-        $bridgeProcess.Refresh()
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-File',
+        ('"{0}"' -f $bridgePath),
+        '-IdleMinutes',
+        '120'
+    ) -WindowStyle Hidden -RedirectStandardOutput $bridgeLog -RedirectStandardError $bridgeErr -PassThru
+
+    Start-Sleep -Seconds 2
+    $bridgeProcess.Refresh()
     if ($bridgeProcess.HasExited) {
         $detail = ''
-            if (Test-Path -LiteralPath $bridgeErr -PathType Leaf) {
-                $detail = ((Get-Content -LiteralPath $bridgeErr -Tail 40 -ErrorAction SilentlyContinue) | Out-String).Trim()
-            }
+        if (Test-Path -LiteralPath $bridgeErr -PathType Leaf) {
+            $detail = ((Get-Content -LiteralPath $bridgeErr -Tail 40 -ErrorAction SilentlyContinue) | Out-String).Trim()
+        }
+        if ([string]::IsNullOrWhiteSpace($detail) -and (Test-Path -LiteralPath $bridgeLog -PathType Leaf)) {
+            $detail = ((Get-Content -LiteralPath $bridgeLog -Tail 40 -ErrorAction SilentlyContinue) | Out-String).Trim()
+        }
         throw ('Windows bridge exited during startup. ' + $detail)
     }
 
