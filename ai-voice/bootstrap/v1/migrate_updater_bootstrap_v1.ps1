@@ -3,7 +3,8 @@
     [string]$BundlePath = '',
     [string]$ExpectedBundleHash = '0a88736b7f732feb5552efccf4adefb8e345dadf4b8d7dbf0d98ed222722476b',
     [string]$BootstrapIndexPath = '',
-    [switch]$NoLaunch
+    [switch]$NoLaunch,
+    [switch]$InstallOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -208,6 +209,19 @@ try {
     Assert-PowerShellParses (Join-Path $toolRoot 'updater_bootstrap.ps1')
     Assert-PowerShellParses (Join-Path $toolRoot 'startup_update_check.ps1')
     Assert-PowerShellParses (Join-Path $toolRoot 'update_and_start.ps1')
+
+    if ($InstallOnly) {
+        Add-Content -LiteralPath $logPath -Value 'STAGE=install-only-complete' -Encoding UTF8
+        Write-Host 'MIGRATION_STAGE install-only-complete'
+        @(
+            'MIGRATION_SUCCESS'
+            ('TOOL_ROOT=' + $toolRoot)
+            ('BACKUP=' + $backupRoot)
+            'MODE=INSTALL_ONLY'
+        ) | Add-Content -LiteralPath $logPath -Encoding UTF8
+        Write-Host 'AI voice updater shell installation completed.'
+        exit 0
+    }
 
     Add-Content -LiteralPath $logPath -Value 'STAGE=run-update' -Encoding UTF8
     Write-Host 'MIGRATION_STAGE run-update'
