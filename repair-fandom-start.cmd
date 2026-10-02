@@ -1,22 +1,40 @@
 @echo off
 setlocal EnableExtensions
 
-set "TARGET="
-for %%D in (C D E F G H I J K L M N O P Q R S T U V W X Y Z) do (
-  if exist "%%D:\_fandom_voice_tool_link\update_and_start.ps1" set "TARGET=%%D:\_fandom_voice_tool_link\update_and_start.ps1"
-)
+set "SCRIPT=%TEMP%\rensei_ai_voice_updater_migration.ps1"
+set "LOG=%TEMP%\rensei_ai_voice_updater_migration_entry.log"
+set "URL=https://raw.githubusercontent.com/rensei11/00-tools/42166ad15db7638145b8995727ada12f6f716ad4/ai-voice/bootstrap/v1/migrate_updater_bootstrap_v1.ps1"
 
-if not defined TARGET goto target_missing
+> "%LOG%" echo AI voice updater recovery started.
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%TARGET%"
+where powershell.exe >nul 2>&1
+if errorlevel 1 goto no_powershell
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; Invoke-WebRequest -UseBasicParsing -Uri '%URL%' -OutFile '%SCRIPT%'" >>"%LOG%" 2>&1
+if errorlevel 1 goto download_failed
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" >>"%LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
-if "%RC%"=="0" exit /b 0
+if not "%RC%"=="0" goto migration_failed
 
-echo Fandom voice tool repair failed.
-pause
-exit /b %RC%
+del /q "%SCRIPT%" >nul 2>&1
+echo AI voice updater recovery completed.
+exit /b 0
 
-:target_missing
-echo Fandom voice tool link was not found.
+:no_powershell
+echo Windows PowerShell was not found.
+echo See log: %LOG%
 pause
 exit /b 1
+
+:download_failed
+echo Updater recovery download failed.
+echo See log: %LOG%
+pause
+exit /b 1
+
+:migration_failed
+echo AI voice updater recovery failed.
+echo See log: %LOG%
+pause
+exit /b %RC%
