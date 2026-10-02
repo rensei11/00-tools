@@ -12,7 +12,7 @@ echo Downloading the current repair script...
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop';$ProgressPreference='SilentlyContinue';[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;Invoke-WebRequest -UseBasicParsing -Uri '%URL%' -OutFile '%SCRIPT%'"
 if errorlevel 1 goto failed
 
-powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT%" -RepairButton
 set "RC=%ERRORLEVEL%"
 del /q "%SCRIPT%" >nul 2>nul
 
