@@ -18,6 +18,14 @@ if errorlevel 1 (
   exit /b 1
 )
 
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$p=$env:TEMP+'\rensei_codex_windows_bridge.ps1';$s=[IO.File]::ReadAllText($p,[Text.Encoding]::UTF8).TrimStart([char]0xFEFF);[IO.File]::WriteAllText($p,$s,(New-Object Text.UTF8Encoding($true)));$t=$null;$e=$null;[void][Management.Automation.Language.Parser]::ParseFile($p,[ref]$t,[ref]$e);if(@($e).Count-ne 0){exit 21};$b=[IO.File]::ReadAllBytes($p);if($b.Length-ge 6 -and $b[0]-eq 0xEF -and $b[1]-eq 0xBB -and $b[2]-eq 0xBF -and $b[3]-eq 0xEF -and $b[4]-eq 0xBB -and $b[5]-eq 0xBF){exit 22}"
+if errorlevel 1 (
+  echo Windows PowerShell 5.1 bridge preflight failed.
+  echo Black Codex was not started.
+  pause
+  exit /b 1
+)
+
 start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%BRIDGE%" -IdleMinutes 120 > "%BRIDGE_LOG%" 2> "%BRIDGE_ERR%"
 timeout /t 2 /nobreak >nul
 
