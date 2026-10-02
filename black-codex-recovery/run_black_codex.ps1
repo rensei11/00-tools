@@ -97,29 +97,31 @@ try {
         throw 'wsl.exe was not found.'
     }
 
-    $probe = "printf 'WSL_READY\\n'"
-    $probeOutput = @(Invoke-WslChecked $probe 'wsl-preflight')
-    if (($probeOutput -join [Environment]::NewLine) -notmatch 'WSL_READY') {
-        throw 'Ubuntu WSL did not return the readiness marker.'
+    $probe = Invoke-WslCommand -Arguments 'uname -s' -Stage 'wsl-preflight'
+    if ($probe.Stdout.Trim() -ne 'Linux') {
+        throw 'Ubuntu WSL did not return the Linux readiness marker.'
     }
 
-    $prepare = @'
-set -euo pipefail
-export GIT_TERMINAL_PROMPT=0
-command -v git >/dev/null 2>&1 || { echo "git was not found in WSL."; exit 10; }
-command -v python3 >/dev/null 2>&1 || { echo "python3 was not found in WSL."; exit 11; }
-command -v codex >/dev/null 2>&1 || { echo "codex was not found in WSL."; exit 12; }
-if [ ! -d /home/rensei/codex-chase/05-AI-voice/.git ]; then
-  mkdir -p /home/rensei/codex-chase
-  git clone https://github.com/rensei11/05-AI-voice.git /home/rensei/codex-chase/05-AI-voice >/dev/null 2>&1 || { echo "git clone failed."; exit 14; }
-fi
-test "$(git -C /home/rensei/codex-chase/05-AI-voice remote get-url origin)" = "https://github.com/rensei11/05-AI-voice.git" || { echo "Unexpected Git origin."; exit 13; }
-git -C /home/rensei/codex-chase/05-AI-voice fetch origin >/dev/null 2>&1 || { echo "git fetch failed."; exit 15; }
-git -C /home/rensei/codex-chase/05-AI-voice rev-parse --verify origin/main >/dev/null
-git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/codex_windows_bridge.ps1
-'@
-    $bridgeSource = @(Invoke-WslChecked $prepare 'bridge-source-preflight')
-    $bridgeText = [string]::Join([Environment]::NewLine, @($bridgeSource)).TrimStart([char]0xFEFF)
+    [void](Invoke-WslCommand -Arguments 'git --version' -Stage 'git-preflight')
+    [void](Invoke-WslCommand -Arguments 'python3 --version' -Stage 'python-preflight')
+    [void](Invoke-WslCommand -Arguments 'codex --version' -Stage 'codex-preflight')
+
+    $repoCheck = Invoke-WslCommand -Arguments 'git -C /home/rensei/codex-chase/05-AI-voice rev-parse --is-inside-work-tree' -Stage 'repo-preflight' -AllowFailure
+    if ($repoCheck.ExitCode -ne 0 -or $repoCheck.Stdout.Trim() -ne 'true') {
+        [void](Invoke-WslCommand -Arguments 'mkdir -p /home/rensei/codex-chase' -Stage 'repo-parent-create')
+        [void](Invoke-WslCommand -Arguments 'env GIT_TERMINAL_PROMPT=0 git clone https://github.com/rensei11/05-AI-voice.git /home/rensei/codex-chase/05-AI-voice' -Stage 'repo-clone')
+    }
+
+    $origin = Invoke-WslCommand -Arguments 'git -C /home/rensei/codex-chase/05-AI-voice remote get-url origin' -Stage 'origin-check'
+    if ($origin.Stdout.Trim() -ne 'https://github.com/rensei11/05-AI-voice.git') {
+        throw 'Unexpected Git origin for AI voice control repo.'
+    }
+
+    [void](Invoke-WslCommand -Arguments 'env GIT_TERMINAL_PROMPT=0 git -C /home/rensei/codex-chase/05-AI-voice fetch origin' -Stage 'git-fetch')
+    [void](Invoke-WslCommand -Arguments 'git -C /home/rensei/codex-chase/05-AI-voice rev-parse --verify origin/main' -Stage 'origin-main-check')
+
+    $bridgeResult = Invoke-WslCommand -Arguments 'git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/codex_windows_bridge.ps1' -Stage 'bridge-source'
+    $bridgeText = $bridgeResult.Stdout.TrimStart([char]0xFEFF)
     if ([string]::IsNullOrWhiteSpace($bridgeText)) {
         throw 'Windows bridge source was empty.'
     }
@@ -187,15 +189,13 @@ git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/codex_windows
         throw ('Windows bridge exited during startup. ' + $detail)
     }
 
-    $run = @'
-set -euo pipefail
-export GIT_TERMINAL_PROMPT=0
-git -C /home/rensei/codex-chase/05-AI-voice fetch origin >/dev/null 2>&1 || { echo "git fetch failed."; exit 15; }
-git -C /home/rensei/codex-chase/05-AI-voice rev-parse --verify origin/main >/dev/null
-git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/run_black_codex.py | python3 - --control-repo /home/rensei/codex-chase/05-AI-voice
-'@
-    $output = @(Invoke-WslChecked $run 'black-codex-runner')
-    foreach ($line in $output) { Write-Host ([string]$line) }
+    $runnerSourceResult = Invoke-WslCommand -Arguments 'git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/run_black_codex.py' -Stage 'runner-source'
+    if ([string]::IsNullOrWhiteSpace($runnerSourceResult.Stdout)) {
+        throw 'Black Codex runner source was empty.'
+    }
+
+    $runnerResult = Invoke-WslCommand -Arguments 'python3 - --control-repo /home/rensei/codex-chase/05-AI-voice' -Stage 'black-codex-runner' -InputText $runnerSourceResult.Stdout
+    if (-not [string]::IsNullOrWhiteSpace($runnerResult.Stdout)) { Write-Host $runnerResult.Stdout.TrimEnd() }
     Write-RecoveryLog 'SUCCESS'
     Write-Host 'Black Codex recovery completed.'
     exit 0
