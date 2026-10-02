@@ -1,7 +1,7 @@
 ﻿$ErrorActionPreference = 'Stop'
 
-$manifestUrl = 'https://raw.githubusercontent.com/rensei11/00-tools/main/fandom-voice-tool-latest.json'
-$expectedVersion = '2026-10-02-v9'
+$manifestUrl = 'https://raw.githubusercontent.com/rensei11/00-tools/main/black-codex-recovery/ai_voice_entry_repair_v9.json'
+$expectedVersion = '2026-10-02-v9-entry-repair'
 $logPath = Join-Path $env:TEMP 'rensei_ai_voice_direct_repair_log.txt'
 $appUrl = 'http://127.0.0.1:7862/'
 
