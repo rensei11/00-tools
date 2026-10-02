@@ -105,7 +105,6 @@ try {
 
     [void](Invoke-WslCommand -Arguments 'git --version' -Stage 'git-preflight')
     [void](Invoke-WslCommand -Arguments 'python3 --version' -Stage 'python-preflight')
-    [void](Invoke-WslCommand -Arguments 'codex --version' -Stage 'codex-preflight')
 
     $repoCheck = Invoke-WslCommand -Arguments 'git -C /home/rensei/codex-chase/05-AI-voice rev-parse --is-inside-work-tree' -Stage 'repo-preflight' -AllowFailure
     if ($repoCheck.ExitCode -ne 0 -or $repoCheck.Stdout.Trim() -ne 'true') {
