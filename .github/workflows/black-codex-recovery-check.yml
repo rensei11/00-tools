@@ -69,25 +69,37 @@ jobs:
               throw ('Recovery PowerShell parse failed: ' + $errors[0].Message)
           }
 
-          foreach ($forbidden in @('$HOME', '$ROOT', '$REPO')) {
+          foreach ($forbidden in @(
+              '$HOME',
+              '$ROOT',
+              '$REPO',
+              'bash -lc',
+              'bash -s',
+              'Invoke-WslChecked',
+              'set -euo pipefail'
+          )) {
               if ($ps1.Contains($forbidden)) {
-                  throw ('Recovery PowerShell reintroduced fragile shell variables: ' + $forbidden)
+                  throw ('Recovery PowerShell reintroduced a forbidden execution pattern: ' + $forbidden)
               }
           }
 
           foreach ($required in @(
-              'WSL_READY',
-              'command -v git',
-              'command -v python3',
-              'command -v codex',
+              'System.Diagnostics.ProcessStartInfo',
+              'RedirectStandardInput',
+              'StandardInputEncoding',
+              'ReadToEndAsync',
+              'uname -s',
+              'git --version',
+              'python3 --version',
+              'codex --version',
               '/home/rensei/codex-chase/05-AI-voice',
+              'env GIT_TERMINAL_PROMPT=0 git',
               'rev-parse --verify origin/main',
               'inspect_update',
               'updater_candidate_test',
               'APP_VERSION_LOCAL',
               '_update_bootstrap_log.txt',
-              'set -euo pipefail',
-              'GIT_TERMINAL_PROMPT=0',
+              'python3 - --control-repo',
               'Stopping stale managed bridge PID=',
               'ParseFile',
               'Black Codex recovery failed.'
@@ -95,4 +107,32 @@ jobs:
               if (-not $ps1.Contains($required)) {
                   throw ('Recovery PowerShell is missing required preflight: ' + $required)
               }
+          }
+
+      - name: Validate Windows PowerShell process API
+        shell: powershell
+        run: |
+          $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+          $startInfo.FileName = 'powershell.exe'
+          $startInfo.Arguments = '-NoProfile -Command "Write-Output READY"'
+          $startInfo.UseShellExecute = $false
+          $startInfo.RedirectStandardInput = $true
+          $startInfo.RedirectStandardOutput = $true
+          $startInfo.RedirectStandardError = $true
+          $startInfo.StandardInputEncoding = New-Object Text.UTF8Encoding($false)
+          $startInfo.StandardOutputEncoding = New-Object Text.UTF8Encoding($false)
+          $startInfo.StandardErrorEncoding = New-Object Text.UTF8Encoding($false)
+          $process = New-Object System.Diagnostics.Process
+          $process.StartInfo = $startInfo
+          if (-not $process.Start()) {
+              throw 'ProcessStartInfo could not start a child process.'
+          }
+          $stdoutTask = $process.StandardOutput.ReadToEndAsync()
+          $stderrTask = $process.StandardError.ReadToEndAsync()
+          $process.StandardInput.Close()
+          $process.WaitForExit()
+          $stdout = $stdoutTask.Result
+          $stderr = $stderrTask.Result
+          if ($process.ExitCode -ne 0 -or $stdout.Trim() -ne 'READY') {
+              throw ('Windows PowerShell redirected-process API failed. ' + $stderr)
           }
