@@ -1,0 +1,92 @@
+name: Black Codex Recovery Check
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "black-codex-recovery/**"
+      - ".github/workflows/black-codex-recovery-check.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "black-codex-recovery/**"
+      - ".github/workflows/black-codex-recovery-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-static-check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate recovery entrypoints
+        shell: powershell
+        run: |
+          $cmdPath = 'black-codex-recovery/black_codex_recovery.cmd'
+          $ps1Path = 'black-codex-recovery/run_black_codex.ps1'
+
+          $cmd = [IO.File]::ReadAllText($cmdPath, [Text.Encoding]::ASCII)
+          $cmdBytes = [IO.File]::ReadAllBytes($cmdPath)
+          if (@($cmdBytes | Where-Object { $_ -gt 127 }).Count -ne 0) {
+              throw 'Recovery CMD must remain ASCII-only.'
+          }
+
+          foreach ($forbidden in @('bash -lc', 'wsl.exe', 'mkdir -p', '$HOME', '$ROOT', '$REPO')) {
+              if ($cmd.Contains($forbidden)) {
+                  throw ('Recovery CMD contains duplicated WSL logic: ' + $forbidden)
+              }
+          }
+
+          foreach ($required in @(
+              'run_black_codex.ps1',
+              'raw.githubusercontent.com/rensei11/00-tools/main/black-codex-recovery/run_black_codex.ps1',
+              'powershell.exe -NoProfile -ExecutionPolicy Bypass -File'
+          )) {
+              if (-not $cmd.Contains($required)) {
+                  throw ('Recovery CMD is missing required canonical-runner handoff: ' + $required)
+              }
+          }
+
+          $ps1 = [IO.File]::ReadAllText($ps1Path, [Text.Encoding]::UTF8)
+          $ps1Bytes = [IO.File]::ReadAllBytes($ps1Path)
+          if (@($ps1Bytes | Where-Object { $_ -gt 127 }).Count -ne 0) {
+              throw 'Recovery PowerShell must remain ASCII-only.'
+          }
+
+          $tokens = $null
+          $errors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $ps1Path),
+              [ref]$tokens,
+              [ref]$errors
+          )
+          if (@($errors).Count -ne 0) {
+              throw ('Recovery PowerShell parse failed: ' + $errors[0].Message)
+          }
+
+          foreach ($forbidden in @('$HOME', '$ROOT', '$REPO')) {
+              if ($ps1.Contains($forbidden)) {
+                  throw ('Recovery PowerShell reintroduced fragile shell variables: ' + $forbidden)
+              }
+          }
+
+          foreach ($required in @(
+              'WSL_READY',
+              'command -v git',
+              'command -v python3',
+              'command -v codex',
+              '/home/rensei/codex-chase/05-AI-voice',
+              'rev-parse --verify origin/main',
+              'inspect_update',
+              'updater_candidate_test',
+              'ParseFile',
+              'Black Codex recovery failed.'
+          )) {
+              if (-not $ps1.Contains($required)) {
+                  throw ('Recovery PowerShell is missing required preflight: ' + $required)
+              }
+          }
