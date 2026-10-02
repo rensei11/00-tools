@@ -11,7 +11,7 @@ del /q "%LOG%" "%BRIDGE%" "%BRIDGE_LOG%" "%BRIDGE_ERR%" >nul 2>nul
 echo BLACK CODEX
 echo Preparing the existing guarded runner...
 
-wsl.exe -d Ubuntu -- bash -lc "set -eu; ROOT=$HOME/codex-chase; REPO=$ROOT/05-AI-voice; if [ ! -d $REPO/.git ]; then mkdir -p $ROOT; git clone https://github.com/rensei11/05-AI-voice.git $REPO >/dev/null 2>&1; fi; git -C $REPO fetch origin >/dev/null 2>&1; git -C $REPO show origin/main:tools/codex_windows_bridge.ps1" > "%BRIDGE%"
+wsl.exe -d Ubuntu -- bash -lc "set -eu; if [ ! -d /home/rensei/codex-chase/05-AI-voice/.git ]; then mkdir -p /home/rensei/codex-chase; git clone https://github.com/rensei11/05-AI-voice.git /home/rensei/codex-chase/05-AI-voice >/dev/null 2>&1; fi; git -C /home/rensei/codex-chase/05-AI-voice fetch origin >/dev/null 2>&1; git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/codex_windows_bridge.ps1" > "%BRIDGE%"
 if errorlevel 1 (
   echo Failed to prepare the existing Windows bridge.
   pause
@@ -30,7 +30,7 @@ start "" /b powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%BRIDGE%" -
 timeout /t 2 /nobreak >nul
 
 echo Running the real WSL Codex task...
-wsl.exe -d Ubuntu -- bash -lc "set -eu; ROOT=$HOME/codex-chase; REPO=$ROOT/05-AI-voice; git -C $REPO fetch origin >/dev/null 2>&1; git -C $REPO show origin/main:tools/run_black_codex.py | python3 - --control-repo $REPO" > "%LOG%" 2>&1
+wsl.exe -d Ubuntu -- bash -lc "set -eu; git -C /home/rensei/codex-chase/05-AI-voice fetch origin >/dev/null 2>&1; git -C /home/rensei/codex-chase/05-AI-voice show origin/main:tools/run_black_codex.py | python3 - --control-repo /home/rensei/codex-chase/05-AI-voice" > "%LOG%" 2>&1
 set "RC=%ERRORLEVEL%"
 
 if not "%RC%"=="0" (
