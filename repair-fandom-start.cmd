@@ -3,7 +3,7 @@ setlocal EnableExtensions
 
 set "SCRIPT=%TEMP%\rensei_ai_voice_updater_migration.ps1"
 set "LOG=%TEMP%\rensei_ai_voice_updater_migration_entry.log"
-set "URL=https://raw.githubusercontent.com/rensei11/00-tools/42166ad15db7638145b8995727ada12f6f716ad4/ai-voice/bootstrap/v1/migrate_updater_bootstrap_v1.ps1"
+set "URL=https://raw.githubusercontent.com/rensei11/00-tools/4dacea95ec1b8903f212ff06b96b95913d5946f9/ai-voice/bootstrap/v1/migrate_updater_bootstrap_v1.ps1"
 
 > "%LOG%" echo AI voice updater recovery started.
 
