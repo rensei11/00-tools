@@ -49,7 +49,9 @@ jobs:
               '[switch]$ForceUpdate',
               '[string]$ToolRoot',
               'UPDATE_BUTTON_REPAIR=SUCCESS',
-              'api.github.com/repos/rensei11/00-tools/contents/ai-voice/update-index.json?ref=main'
+              'api.github.com/repos/rensei11/00-tools/contents/ai-voice/update-index.json?ref=main',
+              'REPLACE_BEGIN relative=',
+              'REPLACE_ERROR relative='
           )) {
               if (-not $updater.Contains($required)) {
                   throw ('public updater is missing: ' + $required)
