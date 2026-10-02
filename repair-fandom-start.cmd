@@ -19,22 +19,26 @@ if not "%RC%"=="0" goto migration_failed
 
 del /q "%SCRIPT%" >nul 2>&1
 echo AI voice updater recovery completed.
+echo Log: %LOG%
 exit /b 0
 
 :no_powershell
-echo Windows PowerShell was not found.
+>>"%LOG%" echo ERROR: powershell.exe was not found.
+if exist "%LOG%" type "%LOG%"
 echo See log: %LOG%
 pause
 exit /b 1
 
 :download_failed
-echo Updater recovery download failed.
+>>"%LOG%" echo ERROR: updater recovery download failed.
+if exist "%LOG%" type "%LOG%"
 echo See log: %LOG%
 pause
 exit /b 1
 
 :migration_failed
-echo AI voice updater recovery failed.
+>>"%LOG%" echo ERROR: updater recovery returned exit code %RC%.
+if exist "%LOG%" type "%LOG%"
 echo See log: %LOG%
 pause
 exit /b %RC%
