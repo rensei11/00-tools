@@ -8,7 +8,7 @@ function canonicalChatUrl(value) {
     if (url.protocol !== "https:" || url.hostname !== "chatgpt.com") {
       return "";
     }
-    const match = url.pathname.match(/^\/c\/([^/]+)/);
+    const match = url.pathname.match(/\/c\/([^/]+)/);
     if (!match) {
       return "";
     }
@@ -166,7 +166,7 @@ async function ensureContentScript(tabId) {
 async function injectIntoOpenChatTabs() {
   const tabs = await chrome.tabs.query({
     url: [
-      "https://chatgpt.com/c/*",
+      "https://chatgpt.com/*",
     ],
   });
   for (const tab of tabs) {
