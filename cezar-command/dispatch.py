@@ -162,6 +162,23 @@ def ensure_target_repo(task: dict[str, Any]) -> tuple[Path, str]:
         else:
             git(repo, "switch", "-c", branch, "--track", remote_ref)
     git(repo, "merge", "--ff-only", remote_ref)
+
+    auth_branch = "cezar-command-auth-probe"
+    auth = git(
+        repo,
+        "push",
+        "--dry-run",
+        "origin",
+        f"HEAD:refs/heads/{auth_branch}",
+        check=False,
+    )
+    if auth.returncode != 0:
+        detail = (auth.stderr or auth.stdout or "").strip()
+        raise DispatchError(
+            "Target GitHub push authentication failed before work started: "
+            + detail[:1200]
+        )
+
     return repo, branch
 
 
@@ -174,6 +191,36 @@ def write_result(task_id: str, summary: dict[str, Any]) -> Path:
         encoding="utf-8",
     )
     return path
+
+
+def read_saved_result(task_id: str) -> dict[str, Any] | None:
+    path = runtime_root() / "results" / f"{safe_slug(task_id)}.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    if str(data.get("task_id") or "") != task_id:
+        return None
+    if str(data.get("status") or "") not in {"PASS", "FAIL", "BLOCKED"}:
+        return None
+    return data
+
+
+def finish_saved_result(
+    task_id: str,
+    summary: dict[str, Any],
+    return_to_chatgpt: bool,
+) -> int:
+    if return_to_chatgpt:
+        command_loop.send_to_commander(summary)
+    processed = load_processed()
+    processed.add(task_id)
+    save_processed(processed)
+    return 0 if summary.get("status") == "PASS" else 2
 
 
 def notify_blocked(
@@ -205,10 +252,18 @@ def execute_task(
         print(f"task_id={task_id} already processed; no duplicate run.", flush=True)
         return 0
 
+    return_to_chatgpt = task.get("return_to_chatgpt") is not False
+    saved = read_saved_result(task_id)
+    if saved is not None:
+        print(
+            f"task_id={task_id} has a completed saved result; retrying delivery only.",
+            flush=True,
+        )
+        return finish_saved_result(task_id, saved, return_to_chatgpt)
+
     prompt = required_text(task, "prompt")
     timeout_seconds = int(task.get("timeout_seconds") or 3600)
     push = task.get("push") is not False
-    return_to_chatgpt = task.get("return_to_chatgpt") is not False
 
     repo, branch = ensure_target_repo(task)
     project_id = command_loop.ensure_project(cezar_url, repo)
@@ -241,14 +296,8 @@ def execute_task(
     result_path = write_result(task_id, summary)
     summary["local_result"] = str(result_path)
 
-    processed.add(task_id)
-    save_processed(processed)
-
-    if return_to_chatgpt:
-        command_loop.send_to_commander(summary)
-
     print(json.dumps(summary, ensure_ascii=False), flush=True)
-    return 0 if summary["status"] == "PASS" else 2
+    return finish_saved_result(task_id, summary, return_to_chatgpt)
 
 
 def main() -> int:
