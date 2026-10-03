@@ -19,8 +19,6 @@ CEZAR_PACKAGE = "@open-mercato/cezar"
 CEZAR_VERSION = "0.13.0"
 CEZAR_URL = "http://127.0.0.1:4322"
 BRIDGE_URL = "http://127.0.0.1:8080"
-AUTOMATION_NAME = "Rensei Cezar Command Center v1"
-TRIGGER_LABEL = "cezar-command"
 
 
 class BootstrapError(RuntimeError):
@@ -226,137 +224,50 @@ def ensure_cezar(control_repo: Path, runtime_root: Path) -> dict[str, Any]:
     return wait_health()
 
 
-def ensure_trigger_label(control_repo: Path) -> None:
-    gh = command("gh")
-    completed = run(
+def ensure_watcher(control_repo: Path, runtime_root: Path) -> int:
+    pid_path = runtime_root / "watcher.pid"
+    if process_alive(pid_path):
+        return int(pid_path.read_text(encoding="ascii").strip())
+
+    watcher = control_repo / "cezar-command" / "watch_task.py"
+    if not watcher.is_file():
+        raise BootstrapError(f"Task watcher was not found: {watcher}")
+
+    env = os.environ.copy()
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    return start_detached(
         [
-            gh,
-            "label",
-            "create",
-            TRIGGER_LABEL,
-            "--color",
-            "6F42C1",
-            "--description",
-            "Trigger the independent Cezar command center",
-            "--force",
+            sys.executable,
+            str(watcher),
+            "--control-repo",
+            str(control_repo),
+            "--cezar-url",
+            CEZAR_URL,
+            "--bridge-url",
+            BRIDGE_URL,
+            "--interval",
+            "20",
         ],
         cwd=control_repo,
-        check=False,
+        env=env,
+        log_path=runtime_root / "watcher.log",
+        pid_path=pid_path,
     )
-    if completed.returncode:
-        detail = (completed.stderr or completed.stdout or "").strip()
-        raise BootstrapError(f"could not create trigger label: {detail}")
 
-
-def control_project_id(control_repo: Path) -> str:
-    data = http_json("GET", f"{CEZAR_URL}/api/v1/projects")
-    projects = data.get("projects") if isinstance(data, dict) else None
-    if not isinstance(projects, list):
-        raise BootstrapError("Cezar did not return its project list.")
-
-    wanted = str(control_repo.resolve()).replace("\\", "/").rstrip("/").lower()
-    for item in projects:
-        if not isinstance(item, dict):
-            continue
-        project_id = str(item.get("id") or "").strip()
-        root = item.get("root")
-        if not project_id or not isinstance(root, str):
-            continue
-        normalized = root.replace("\\", "/").rstrip("/").lower()
-        if normalized == wanted:
-            return project_id
-
-    boot = str(data.get("bootProject") or "").strip() if isinstance(data, dict) else ""
-    if boot:
-        return boot
-    raise BootstrapError("Could not identify the Cezar control project.")
-
-
-def ensure_automation(control_repo: Path) -> str:
-    project_id = control_project_id(control_repo)
-    quoted = urllib.parse.quote(project_id, safe="")
-    base = f"{CEZAR_URL}/api/v1/p/{quoted}/automations"
-
-    listing = http_json("GET", base)
-    items = listing.get("automations") if isinstance(listing, dict) else None
-    if isinstance(items, list):
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            if item.get("name") != AUTOMATION_NAME:
-                continue
-            automation_id = str(item.get("id") or "").strip()
-            if automation_id:
-                if not item.get("enabled"):
-                    http_json(
-                        "POST",
-                        f"{base}/{automation_id}/enable",
-                        {},
-                    )
-                return automation_id
-
-    dispatch_command = (
-        "python3 cezar-command/dispatch.py "
-        f"--control-repo {control_repo} "
-        f"--cezar-url {CEZAR_URL} "
-        f"--bridge-url {BRIDGE_URL}"
-    )
-    definition = {
-        "name": AUTOMATION_NAME,
-        "kind": "github",
-        "events": ["issue.labeled"],
-        "intervalSeconds": 60,
-        "filters": {
-            "changedLabels": [TRIGGER_LABEL],
-            "lookbackDays": 7,
-            "maxRecords": 20,
-        },
-        "task": {
-            "steps": [
-                {
-                    "id": "dispatch",
-                    "name": "Dispatch command",
-                    "command": dispatch_command,
-                }
-            ],
-            "worktree": False,
-            "autonomous": True,
-            "generateFollowups": False,
-        },
-        "enable": True,
-    }
-    created = http_json(
-        "POST",
-        base,
-        definition,
-        timeout=30.0,
-    )
-    automation = created.get("automation") if isinstance(created, dict) else None
-    automation_id = (
-        str(automation.get("id") or "").strip()
-        if isinstance(automation, dict)
-        else ""
-    )
-    if not automation_id:
-        raise BootstrapError(
-            f"Cezar automation creation returned an invalid response: {created}"
-        )
-    return automation_id
 
 def write_runtime(
     runtime_root: Path,
     control_repo: Path,
-    automation_id: str,
+    watcher_pid: int,
     health: dict[str, Any],
 ) -> None:
     payload = {
         "controlRepo": str(control_repo),
         "cezarUrl": CEZAR_URL,
         "bridgeUrl": BRIDGE_URL,
-        "automationId": automation_id,
+        "watcherPid": watcher_pid,
         "cezarVersion": str(health.get("version") or CEZAR_VERSION),
-        "triggerLabel": TRIGGER_LABEL,
-        "mode": "command-center",
+        "mode": "local-task-watch",
     }
     path = runtime_root / "runtime.json"
     path.write_text(
@@ -381,15 +292,13 @@ def main() -> int:
     command("node")
     command("npm")
     command("codex")
-    command("gh")
 
     health = ensure_cezar(control_repo, runtime_root)
-    ensure_trigger_label(control_repo)
-    automation_id = ensure_automation(control_repo)
+    watcher_pid = ensure_watcher(control_repo, runtime_root)
     write_runtime(
         runtime_root,
         control_repo,
-        automation_id,
+        watcher_pid,
         health,
     )
 
@@ -397,8 +306,7 @@ def main() -> int:
         "status": "READY",
         "component": "cezar-command-center",
         "cezar_url": CEZAR_URL,
-        "automation_id": automation_id,
-        "trigger_label": TRIGGER_LABEL,
+        "watcher_pid": watcher_pid,
     }
     try:
         command_loop.send_to_commander(BRIDGE_URL, summary)
@@ -408,7 +316,7 @@ def main() -> int:
 
     print("CEZAR_COMMAND_CENTER=READY")
     print(f"CEZAR_URL={CEZAR_URL}")
-    print(f"AUTOMATION_ID={automation_id}")
+    print(f"WATCHER_PID={watcher_pid}")
     return 0
 
 
