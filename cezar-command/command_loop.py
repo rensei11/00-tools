@@ -323,7 +323,7 @@ def main() -> int:
     summary = final_summary(run, run_id, project_id)
 
     if summary["status"] == "PASS" and not args.no_push:
-        summary["git"] = commit_and_push(cezar_url, project_id, run_id)
+        summary["git"] = push_run(cezar_url, project_id, run_id)
 
     result_path = Path(args.result_file).expanduser().resolve()
     result_path.write_text(
