@@ -6,5 +6,6 @@
   "prompt": "Replace this with one self-contained task.",
   "timeout_seconds": 3600,
   "push": true,
-  "return_to_chatgpt": true
+  "return_to_chatgpt": true,
+  "schema_version": 1
 }
