@@ -184,6 +184,32 @@ jobs:
               )
           print("Cezar publication path: push finalized branch only")
           PY
+      - name: Verify commander follows ChatGPT SPA navigation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          chat = Path("cezar-command/commander_extension/chatgpt.js").read_text(encoding="utf-8")
+          worker = Path("cezar-command/commander_extension/service_worker.js").read_text(encoding="utf-8")
+
+          required_chat = (
+              "MutationObserver",
+              "refreshRegistrationButton",
+              "popstate",
+              "hashchange",
+              'match(/\\/c\\/([^/]+)/)',
+          )
+          missing_chat = [token for token in required_chat if token not in chat]
+          if missing_chat:
+              raise SystemExit("SPA registration support missing: " + ", ".join(missing_chat))
+
+          if '"https://chatgpt.com/*"' not in worker:
+              raise SystemExit("service worker does not inject across ChatGPT routes")
+          if 'match(/\\/c\\/([^/]+)/)' not in worker:
+              raise SystemExit("service worker still requires /c/ at the pathname start")
+
+          print("ChatGPT SPA navigation support: OK")
+          PY
       - name: Install exact Cezar runtime
         run: npm install --prefix .cezar-smoke --no-audit --no-fund @open-mercato/cezar@0.13.0
       - name: Run exact Cezar API smoke test
