@@ -202,6 +202,13 @@
   installRegistrationButton();
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "cezar_commander_probe") {
+      sendResponse({
+        ready: true,
+        conversationUrl: conversationUrl(),
+      });
+      return;
+    }
     if (message?.type !== "cezar_commander_inject") {
       return;
     }
