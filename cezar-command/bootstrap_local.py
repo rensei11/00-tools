@@ -8,6 +8,7 @@ import subprocess
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -245,8 +246,36 @@ def ensure_trigger_label(control_repo: Path) -> None:
         raise BootstrapError(f"could not create trigger label: {detail}")
 
 
+def control_project_id(control_repo: Path) -> str:
+    data = http_json("GET", f"{CEZAR_URL}/api/v1/projects")
+    projects = data.get("projects") if isinstance(data, dict) else None
+    if not isinstance(projects, list):
+        raise BootstrapError("Cezar did not return its project list.")
+
+    wanted = str(control_repo.resolve()).replace("\\", "/").rstrip("/").lower()
+    for item in projects:
+        if not isinstance(item, dict):
+            continue
+        project_id = str(item.get("id") or "").strip()
+        root = item.get("root")
+        if not project_id or not isinstance(root, str):
+            continue
+        normalized = root.replace("\\", "/").rstrip("/").lower()
+        if normalized == wanted:
+            return project_id
+
+    boot = str(data.get("bootProject") or "").strip() if isinstance(data, dict) else ""
+    if boot:
+        return boot
+    raise BootstrapError("Could not identify the Cezar control project.")
+
+
 def ensure_automation(control_repo: Path) -> str:
-    listing = http_json("GET", f"{CEZAR_URL}/api/v1/automations")
+    project_id = control_project_id(control_repo)
+    quoted = urllib.parse.quote(project_id, safe="")
+    base = f"{CEZAR_URL}/api/v1/p/{quoted}/automations"
+
+    listing = http_json("GET", base)
     items = listing.get("automations") if isinstance(listing, dict) else None
     if isinstance(items, list):
         for item in items:
@@ -259,7 +288,7 @@ def ensure_automation(control_repo: Path) -> str:
                 if not item.get("enabled"):
                     http_json(
                         "POST",
-                        f"{CEZAR_URL}/api/v1/automations/{automation_id}/enable",
+                        f"{base}/{automation_id}/enable",
                         {},
                     )
                 return automation_id
@@ -296,7 +325,7 @@ def ensure_automation(control_repo: Path) -> str:
     }
     created = http_json(
         "POST",
-        f"{CEZAR_URL}/api/v1/automations",
+        base,
         definition,
         timeout=30.0,
     )
@@ -311,7 +340,6 @@ def ensure_automation(control_repo: Path) -> str:
             f"Cezar automation creation returned an invalid response: {created}"
         )
     return automation_id
-
 
 def write_runtime(
     runtime_root: Path,
