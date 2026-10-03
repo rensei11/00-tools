@@ -57,6 +57,10 @@ try {
 
     $repoCheck = Invoke-Wsl -CommandArgs @('test', '-d', ($repo + '/.git')) -Stage 'repo-check' -AllowFailure
     if ($repoCheck.ExitCode -ne 0) {
+        $repoExists = Invoke-Wsl -CommandArgs @('test', '-e', $repo) -Stage 'partial-repo-check' -AllowFailure
+        if ($repoExists.ExitCode -eq 0) {
+            [void](Invoke-Wsl -CommandArgs @('rm', '-rf', '--', $repo) -Stage 'partial-repo-remove')
+        }
         [void](Invoke-Wsl -CommandArgs @(
             'env',
             'GIT_TERMINAL_PROMPT=0',
@@ -70,9 +74,9 @@ try {
         ) -Stage 'repo-clone')
     }
     else {
-        $status = Invoke-Wsl -CommandArgs @('git', '-C', $repo, 'status', '--porcelain') -Stage 'repo-status'
-        if (-not [string]::IsNullOrWhiteSpace($status.Output)) {
-            throw 'Control repository has local changes.'
+        $origin = Invoke-Wsl -CommandArgs @('git', '-C', $repo, 'remote', 'get-url', 'origin') -Stage 'repo-origin'
+        if ($origin.Output.Trim() -ne 'https://github.com/rensei11/00-tools.git') {
+            throw ('Unexpected control repository origin: ' + $origin.Output.Trim())
         }
 
         [void](Invoke-Wsl -CommandArgs @(
@@ -86,7 +90,8 @@ try {
             'main'
         ) -Stage 'repo-fetch')
         [void](Invoke-Wsl -CommandArgs @('git', '-C', $repo, 'switch', 'main') -Stage 'repo-switch')
-        [void](Invoke-Wsl -CommandArgs @('git', '-C', $repo, 'merge', '--ff-only', 'origin/main') -Stage 'repo-update')
+        [void](Invoke-Wsl -CommandArgs @('git', '-C', $repo, 'reset', '--hard', 'origin/main') -Stage 'repo-reset')
+        [void](Invoke-Wsl -CommandArgs @('git', '-C', $repo, 'clean', '-fd') -Stage 'repo-clean')
     }
 
     [void](Invoke-Wsl -CommandArgs @(
