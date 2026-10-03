@@ -132,6 +132,38 @@ jobs:
 
           print("explicit commander registration: OK")
           PY
+      - name: Verify one-time commander setup cannot require manual console resume
+        run: |
+          python - <<'PY'
+          import re
+          from pathlib import Path
+
+          link = Path("cezar-command/commander_link.py").read_text(encoding="utf-8")
+          worker = Path("cezar-command/commander_extension/service_worker.js").read_text(encoding="utf-8")
+          launcher = Path("cezar-command/start_cezar_command_center.ps1").read_text(encoding="utf-8")
+
+          port_match = re.search(r"SETUP_NOTIFY_PORT = (\d+)", link)
+          url_match = re.search(r'SETUP_NOTIFY_URL = "http://127\.0\.0\.1:(\d+)/register"', worker)
+          if not port_match or not url_match or port_match.group(1) != url_match.group(1):
+              raise SystemExit(
+                  f"one-time setup port mismatch: link={port_match.group(1) if port_match else None} "
+                  f"worker={url_match.group(1) if url_match else None}"
+              )
+
+          required = (
+              "wait-register",
+              "commander-wait-registration",
+              "continues automatically",
+          )
+          missing = [token for token in required if token not in launcher]
+          if missing:
+              raise SystemExit("automatic one-time setup continuation missing: " + ", ".join(missing))
+
+          if "Read-Host" in launcher:
+              raise SystemExit("manual console resume remains in the launcher")
+
+          print("one-time setup auto-continuation: OK")
+          PY
       - name: Install exact Cezar runtime
         run: npm install --prefix .cezar-smoke --no-audit --no-fund @open-mercato/cezar@0.13.0
       - name: Run exact Cezar API smoke test
