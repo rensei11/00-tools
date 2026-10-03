@@ -648,7 +648,7 @@ def ensure_real_codex_probe(
             f"Real Codex proof did not expose a safe task branch: {branch or '(missing)'}"
         )
 
-    command_loop.commit_and_push(
+    command_loop.push_run(
         CEZAR_URL,
         project_id,
         run_id,
