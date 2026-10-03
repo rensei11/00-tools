@@ -34,6 +34,7 @@ jobs:
             cezar-command/bootstrap_local.py \
             cezar-command/watch_task.py \
             cezar-command/cezar_smoke_test.py \
+            cezar-command/commander_link.py \
             cezar-command/test_command_loop.py
       - name: Run command loop tests
         run: python -m unittest cezar-command/test_command_loop.py
@@ -61,6 +62,29 @@ jobs:
                   raise SystemExit("managed npm returned no version")
               print(f"managed Node: {node_version}")
               print(f"managed npm: {npm_version}")
+          PY
+      - name: Check independent commander extension JavaScript
+        run: |
+          node --check cezar-command/commander_extension/control.js
+          node --check cezar-command/commander_extension/chatgpt.js
+          node --check cezar-command/commander_extension/service_worker.js
+          node -e "JSON.parse(require('fs').readFileSync('cezar-command/commander_extension/manifest.json','utf8')); console.log('manifest: OK')"
+      - name: Reject legacy port 8080 Bridge dependency
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          root = Path("cezar-command")
+          bad = []
+          for path in root.rglob("*"):
+              if not path.is_file() or path.suffix.lower() not in {".py", ".ps1", ".js", ".json"}:
+                  continue
+              text = path.read_text(encoding="utf-8", errors="replace")
+              for token in ("127.0.0.1:8080", "/setup/status", "/browser/passive-prompt"):
+                  if token in text:
+                      bad.append(f"{path}: {token}")
+          if bad:
+              raise SystemExit("legacy Bridge dependency remains:\n" + "\n".join(bad))
+          print("legacy Bridge dependency: none")
           PY
       - name: Install exact Cezar runtime
         run: npm install --prefix .cezar-smoke --no-audit --no-fund @open-mercato/cezar@0.13.0
