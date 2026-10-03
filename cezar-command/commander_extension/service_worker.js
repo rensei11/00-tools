@@ -35,62 +35,70 @@ async function closeControlTab(tabId) {
   }
 }
 
-async function registerCommander(sender, controlOrigin) {
-  const controlTab = sender.tab;
-  if (!Number.isInteger(controlTab?.id) || !Number.isInteger(controlTab?.windowId)) {
-    throw new Error("Control tab information is unavailable.");
+async function storedCommander() {
+  const stored = await chrome.storage.local.get(COMMANDER_KEY);
+  const record = stored[COMMANDER_KEY];
+  const url = canonicalChatUrl(record?.url);
+  if (!url || !Number.isInteger(record?.tabId)) {
+    return null;
   }
-
-  const tabs = await chrome.tabs.query({ windowId: controlTab.windowId });
-  const chatTabs = tabs.filter((tab) => {
-    return Number.isInteger(tab.id) &&
-      tab.id !== controlTab.id &&
-      Boolean(canonicalChatUrl(tab.url));
-  });
-
-  if (!chatTabs.length) {
-    throw new Error("No ChatGPT conversation tab was found in the same Chrome window.");
+  try {
+    const tab = await chrome.tabs.get(record.tabId);
+    if (canonicalChatUrl(tab?.url) !== url) {
+      return null;
+    }
+    return { tab, url };
+  } catch {
+    return null;
   }
+}
 
-  const left = chatTabs
-    .filter((tab) => Number.isInteger(tab.index) && tab.index < controlTab.index)
-    .sort((a, b) => b.index - a.index);
-  const candidate = left[0] || chatTabs.sort((a, b) => b.index - a.index)[0];
-  const url = canonicalChatUrl(candidate.url);
-  if (!url) {
-    throw new Error("Commander ChatGPT URL is invalid.");
+async function registerCurrentChat(sender, requestedUrl) {
+  const tab = sender.tab;
+  const url = canonicalChatUrl(requestedUrl || tab?.url);
+  if (!Number.isInteger(tab?.id) || !url || canonicalChatUrl(tab.url) !== url) {
+    return {
+      registered: false,
+      error: "This page is not a ChatGPT conversation.",
+    };
   }
 
   await chrome.storage.local.set({
     [COMMANDER_KEY]: {
-      tabId: candidate.id,
+      tabId: tab.id,
       url,
     },
   });
-
   return {
-    status: "REGISTERED",
+    registered: true,
     conversationUrl: url,
   };
 }
 
+async function confirmCommanderRegistration() {
+  const existing = await storedCommander();
+  if (!existing) {
+    throw new Error(
+      "Commander chat is not registered. Click the Cezar commander registration button in the intended ChatGPT conversation."
+    );
+  }
+  return {
+    status: "REGISTERED",
+    conversationUrl: existing.url,
+  };
+}
+
 async function findCommanderTab() {
+  const existing = await storedCommander();
+  if (existing) {
+    return existing.tab;
+  }
+
   const stored = await chrome.storage.local.get(COMMANDER_KEY);
   const record = stored[COMMANDER_KEY];
   const storedUrl = canonicalChatUrl(record?.url);
   if (!storedUrl) {
     throw new Error("Commander ChatGPT tab has not been registered.");
-  }
-
-  if (Number.isInteger(record?.tabId)) {
-    try {
-      const tab = await chrome.tabs.get(record.tabId);
-      if (canonicalChatUrl(tab.url) === storedUrl) {
-        return tab;
-      }
-    } catch {
-      // Fall through to URL search.
-    }
   }
 
   const tabs = await chrome.tabs.query({});
@@ -108,8 +116,43 @@ async function findCommanderTab() {
   return candidate;
 }
 
+async function ensureContentScript(tabId) {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, {
+      type: "cezar_commander_probe",
+    });
+    if (response?.ready) {
+      return;
+    }
+  } catch {
+    // Inject below.
+  }
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ["chatgpt.js"],
+  });
+}
+
+async function injectIntoOpenChatTabs() {
+  const tabs = await chrome.tabs.query({
+    url: [
+      "https://chatgpt.com/c/*",
+    ],
+  });
+  for (const tab of tabs) {
+    if (!Number.isInteger(tab.id)) {
+      continue;
+    }
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ["chatgpt.js"],
+    }).catch(() => {});
+  }
+}
+
 async function deliverCommander(message) {
   const tab = await findCommanderTab();
+  await ensureContentScript(tab.id);
   const response = await chrome.tabs.sendMessage(tab.id, {
     type: "cezar_commander_inject",
     prompt: String(message || ""),
@@ -123,7 +166,32 @@ async function deliverCommander(message) {
   };
 }
 
-chrome.runtime.onMessage.addListener((message, sender) => {
+chrome.runtime.onInstalled.addListener(() => {
+  injectIntoOpenChatTabs().catch(() => {});
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  injectIntoOpenChatTabs().catch(() => {});
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "cezar_commander_register_this_tab") {
+    registerCurrentChat(sender, message.conversationUrl)
+      .then(sendResponse)
+      .catch((error) => {
+        sendResponse({
+          registered: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    return true;
+  }
+
+  if (message?.type === "cezar_commander_probe") {
+    sendResponse({ ready: true });
+    return;
+  }
+
   if (message?.type !== "cezar_command_control") {
     return;
   }
@@ -136,7 +204,7 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     try {
       let result;
       if (mode === "register") {
-        result = await registerCommander(sender, controlOrigin);
+        result = await confirmCommanderRegistration();
       } else if (mode === "deliver") {
         result = await deliverCommander(message.message);
       } else {
