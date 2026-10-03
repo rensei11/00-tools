@@ -57,6 +57,32 @@ def command(name: str) -> str:
     return found
 
 
+def version_tuple(text: str) -> tuple[int, int, int]:
+    import re
+
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", text)
+    if not match:
+        return (0, 0, 0)
+    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+
+
+def check_node() -> None:
+    node = command("node")
+    command("npm")
+    version = run([node, "--version"]).stdout.strip()
+    if version_tuple(version) < (20, 0, 0):
+        raise BootstrapError(f"Node.js 20+ is required; found {version}")
+
+
+def check_codex() -> str:
+    codex = command("codex")
+    completed = run([codex, "--version"])
+    version = completed.stdout.strip() or completed.stderr.strip()
+    if not version:
+        raise BootstrapError("Codex CLI returned no version.")
+    return codex
+
+
 def http_json(
     method: str,
     url: str,
@@ -184,6 +210,66 @@ def ensure_cezar_package(runtime_root: Path) -> Path:
     return binary
 
 
+def ensure_runtime_smoke(
+    control_repo: Path,
+    runtime_root: Path,
+    binary: Path,
+) -> None:
+    marker = runtime_root / "smoke-pass.json"
+    smoke_script = control_repo / "cezar-command" / "cezar_smoke_test.py"
+    if not smoke_script.is_file():
+        raise BootstrapError(f"Cezar smoke test was not found: {smoke_script}")
+
+    revision = run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=control_repo,
+    ).stdout.strip()
+    expected = {
+        "controlRevision": revision,
+        "cezarVersion": CEZAR_VERSION,
+    }
+
+    if marker.is_file():
+        try:
+            current = json.loads(marker.read_text(encoding="utf-8"))
+        except Exception:
+            current = {}
+        if current == expected:
+            return
+
+    completed = run(
+        [
+            sys.executable,
+            str(smoke_script),
+            "--cezar-bin",
+            str(binary),
+            "--port",
+            "4399",
+        ],
+        cwd=control_repo,
+    )
+    if '"status": "PASS"' not in completed.stdout:
+        raise BootstrapError(
+            "Cezar self-test did not report PASS: "
+            + (completed.stdout or completed.stderr).strip()[:1200]
+        )
+
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps(expected, ensure_ascii=True, indent=2) + "\n",
+        encoding="ascii",
+    )
+
+
+def verify_return_channel() -> None:
+    try:
+        command_loop.verify_commander_bridge(BRIDGE_URL)
+    except Exception as exc:
+        raise BootstrapError(
+            f"ChatGPT return channel is not ready: {exc}"
+        ) from exc
+
+
 def ensure_cezar(control_repo: Path, runtime_root: Path) -> dict[str, Any]:
     pid_path = runtime_root / "cezar.pid"
     health = try_http_json(f"{CEZAR_URL}/api/v1/health")
@@ -196,7 +282,7 @@ def ensure_cezar(control_repo: Path, runtime_root: Path) -> dict[str, Any]:
         return health if isinstance(health, dict) else {}
 
     binary = ensure_cezar_package(runtime_root)
-    codex_bin = command("codex")
+    codex_bin = check_codex()
     env = os.environ.copy()
     env.update(
         {
@@ -289,9 +375,14 @@ def main() -> int:
 
     command("git")
     command("python3")
-    command("node")
-    command("npm")
-    command("codex")
+    check_node()
+    codex_bin = check_codex()
+    if not codex_bin:
+        raise BootstrapError("Codex CLI is not available.")
+
+    binary = ensure_cezar_package(runtime_root)
+    ensure_runtime_smoke(control_repo, runtime_root, binary)
+    verify_return_channel()
 
     health = ensure_cezar(control_repo, runtime_root)
     watcher_pid = ensure_watcher(control_repo, runtime_root)
