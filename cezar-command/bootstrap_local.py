@@ -694,6 +694,7 @@ def write_runtime(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--control-repo", required=True)
+    parser.add_argument("--skip-commander-register", action="store_true")
     args = parser.parse_args()
 
     control_repo = Path(args.control_repo).expanduser().resolve()
@@ -704,14 +705,15 @@ def main() -> int:
 
     command("git")
     command("python3")
-    commander_registered = False
-    commander = register_return_channel()
-    commander_registered = True
-    print(
-        "COMMANDER_REGISTERED="
-        + str(commander.get("conversationUrl") or "unknown"),
-        flush=True,
-    )
+    commander_registered = bool(args.skip_commander_register)
+    if not commander_registered:
+        commander = register_return_channel()
+        commander_registered = True
+        print(
+            "COMMANDER_REGISTERED="
+            + str(commander.get("conversationUrl") or "unknown"),
+            flush=True,
+        )
 
     node_root = ensure_managed_node(runtime_root)
     apply_managed_node(node_root)
