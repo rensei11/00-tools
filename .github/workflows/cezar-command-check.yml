@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - "cezar-command/**"
+      - "cezar-command-center.cmd"
       - ".github/workflows/cezar-command-check.yml"
   pull_request:
     paths:
       - "cezar-command/**"
+      - "cezar-command-center.cmd"
       - ".github/workflows/cezar-command-check.yml"
 
 permissions:
@@ -21,7 +23,27 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Compile controller
-        run: python -m py_compile cezar-command/command_loop.py cezar-command/test_command_loop.py
+      - name: Compile controllers
+        run: |
+          python -m py_compile \
+            cezar-command/command_loop.py \
+            cezar-command/dispatch.py \
+            cezar-command/bootstrap_local.py \
+            cezar-command/test_command_loop.py
       - name: Run command loop tests
         run: python -m unittest cezar-command/test_command_loop.py
+      - name: Verify Windows launcher files are ASCII
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          files = [
+              Path("cezar-command-center.cmd"),
+              Path("cezar-command/start_cezar_command_center.ps1"),
+          ]
+          for path in files:
+              data = path.read_bytes()
+              bad = [b for b in data if b > 0x7F]
+              if bad:
+                  raise SystemExit(f"{path} contains non-ASCII bytes")
+              print(f"{path}: ASCII OK")
+          PY
