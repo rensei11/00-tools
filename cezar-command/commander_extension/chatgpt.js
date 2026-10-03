@@ -1,4 +1,9 @@
 (() => {
+  if (window.__renseiCezarCommanderLinkLoaded) {
+    return;
+  }
+  window.__renseiCezarCommanderLinkLoaded = true;
+
   const COMPOSER_SELECTORS = [
     '#prompt-textarea[contenteditable="true"]',
     'div.ProseMirror[contenteditable="true"][role="textbox"]',
@@ -135,6 +140,66 @@
       });
     });
   }
+
+  function conversationUrl() {
+    try {
+      const url = new URL(location.href);
+      const match = url.pathname.match(/^\/c\/([^/]+)/);
+      return match ? "https://chatgpt.com/c/" + match[1] : "";
+    } catch {
+      return "";
+    }
+  }
+
+  function installRegistrationButton() {
+    if (!conversationUrl() || document.getElementById("rensei-cezar-commander-register")) {
+      return;
+    }
+
+    const button = document.createElement("button");
+    button.id = "rensei-cezar-commander-register";
+    button.type = "button";
+    button.textContent = "このチャットをCezar司令に登録";
+    Object.assign(button.style, {
+      position: "fixed",
+      right: "18px",
+      bottom: "86px",
+      zIndex: "2147483647",
+      padding: "10px 14px",
+      borderRadius: "10px",
+      border: "1px solid #777",
+      background: "#202020",
+      color: "#fff",
+      fontSize: "13px",
+      fontWeight: "700",
+      cursor: "pointer",
+      boxShadow: "0 4px 18px rgba(0,0,0,.25)",
+    });
+
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      button.textContent = "登録中...";
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "cezar_commander_register_this_tab",
+          conversationUrl: conversationUrl(),
+        });
+        if (!response?.registered) {
+          throw new Error(response?.error || "登録できませんでした");
+        }
+        button.textContent = "Cezar司令に登録済み";
+        setTimeout(() => button.remove(), 1800);
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = "登録失敗 - もう一度押す";
+        console.error(error);
+      }
+    });
+
+    document.documentElement.appendChild(button);
+  }
+
+  installRegistrationButton();
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type !== "cezar_commander_inject") {
