@@ -35,9 +35,10 @@ jobs:
             cezar-command/watch_task.py \
             cezar-command/cezar_smoke_test.py \
             cezar-command/commander_link.py \
-            cezar-command/test_command_loop.py
+            cezar-command/test_command_loop.py \
+            cezar-command/test_dispatch.py
       - name: Run command loop tests
-        run: python -m unittest cezar-command/test_command_loop.py
+        run: python -m unittest cezar-command/test_command_loop.py cezar-command/test_dispatch.py
       - name: Prove managed Node bootstrap from an empty folder
         run: |
           python - <<'PY'
@@ -85,6 +86,51 @@ jobs:
           if bad:
               raise SystemExit("legacy Bridge dependency remains:\n" + "\n".join(bad))
           print("legacy Bridge dependency: none")
+          PY
+      - name: Verify commander registration is explicit and version-aligned
+        run: |
+          python - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          manifest = json.loads(
+              Path("cezar-command/commander_extension/manifest.json").read_text(encoding="utf-8")
+          )
+          link = Path("cezar-command/commander_link.py").read_text(encoding="utf-8")
+          worker = Path("cezar-command/commander_extension/service_worker.js").read_text(encoding="utf-8")
+          chat = Path("cezar-command/commander_extension/chatgpt.js").read_text(encoding="utf-8")
+
+          match = re.search(r'EXPECTED_EXTENSION_VERSION = "([^"]+)"', link)
+          if not match or match.group(1) != manifest.get("version"):
+              raise SystemExit(
+                  f"commander extension version mismatch: link={match.group(1) if match else None} "
+                  f"manifest={manifest.get('version')}"
+              )
+
+          required = (
+              "cezar_commander_register_this_tab",
+              "registerCurrentChat",
+              "Commander chat is not registered",
+          )
+          missing = [token for token in required if token not in worker and token not in chat]
+          if missing:
+              raise SystemExit("explicit commander registration tokens missing: " + ", ".join(missing))
+
+          forbidden = (
+              "lastAccessed",
+              "nearest",
+              "left[0]",
+              "chatTabs.sort",
+          )
+          found = [token for token in forbidden if token in worker]
+          if found:
+              raise SystemExit("heuristic commander tab selection remains: " + ", ".join(found))
+
+          if "scripting" not in manifest.get("permissions", []):
+              raise SystemExit("commander extension lacks scripting permission for existing ChatGPT tabs")
+
+          print("explicit commander registration: OK")
           PY
       - name: Install exact Cezar runtime
         run: npm install --prefix .cezar-smoke --no-audit --no-fund @open-mercato/cezar@0.13.0
