@@ -287,7 +287,7 @@ def execute_task(
     summary["target_branch"] = branch
 
     if summary["status"] == "PASS" and push:
-        summary["git"] = command_loop.commit_and_push(
+        summary["git"] = command_loop.push_run(
             cezar_url,
             project_id,
             run_id,
