@@ -172,6 +172,47 @@ def start_detached(
     return process.pid
 
 
+def pid_value(pid_path: Path) -> int | None:
+    if not pid_path.is_file():
+        return None
+    try:
+        return int(pid_path.read_text(encoding="ascii").strip())
+    except (ValueError, OSError):
+        return None
+
+
+def process_cmdline(pid: int) -> str:
+    try:
+        raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+    except OSError:
+        return ""
+    return raw.replace(b"\x00", b" ").decode("utf-8", errors="replace")
+
+
+def stop_managed_cezar(pid_path: Path, binary: Path) -> None:
+    pid = pid_value(pid_path)
+    if pid is None or not process_alive(pid_path):
+        return
+
+    command_line = process_cmdline(pid)
+    if str(binary) not in command_line or "--port 4322" not in command_line:
+        raise BootstrapError(
+            "Port 4322 process does not match the managed Cezar command center."
+        )
+
+    os.kill(pid, 15)
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        if not process_alive(pid_path):
+            pid_path.unlink(missing_ok=True)
+            return
+        time.sleep(0.25)
+
+    raise BootstrapError(
+        "The old managed Cezar process did not stop cleanly."
+    )
+
+
 def wait_health(timeout_seconds: float = 60.0) -> dict[str, Any]:
     deadline = time.monotonic() + timeout_seconds
     last: Exception | None = None
@@ -323,16 +364,35 @@ def ensure_cezar(
     codex_bin: Path,
 ) -> dict[str, Any]:
     pid_path = runtime_root / "cezar.pid"
-    health = try_http_json(f"{CEZAR_URL}/api/v1/health")
+    config_path = runtime_root / "cezar-service-config.json"
+    binary = ensure_cezar_package(runtime_root)
+    expected_config = {
+        "cezarVersion": CEZAR_VERSION,
+        "codexBin": str(codex_bin),
+        "codexNetwork": "0",
+        "port": 4322,
+    }
 
+    health = try_http_json(f"{CEZAR_URL}/api/v1/health")
     if health is not None:
         if not process_alive(pid_path):
             raise BootstrapError(
                 "Port 4322 already has a Cezar service not owned by this command center."
             )
-        return health if isinstance(health, dict) else {}
 
-    binary = ensure_cezar_package(runtime_root)
+        try:
+            current_config = json.loads(
+                config_path.read_text(encoding="utf-8")
+            )
+        except Exception:
+            current_config = {}
+
+        if current_config == expected_config:
+            return health if isinstance(health, dict) else {}
+
+        stop_managed_cezar(pid_path, binary)
+        health = None
+
     env = os.environ.copy()
     env.update(
         {
@@ -357,7 +417,12 @@ def ensure_cezar(
         log_path=runtime_root / "cezar.log",
         pid_path=pid_path,
     )
-    return wait_health()
+    health = wait_health()
+    config_path.write_text(
+        json.dumps(expected_config, ensure_ascii=True, indent=2) + "\n",
+        encoding="ascii",
+    )
+    return health
 
 
 def prepare_agent_probe_repo(runtime_root: Path) -> Path:
