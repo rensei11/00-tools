@@ -177,7 +177,6 @@ def write_result(task_id: str, summary: dict[str, Any]) -> Path:
 
 
 def notify_blocked(
-    bridge_url: str,
     task_id: str,
     message: str,
 ) -> None:
@@ -187,7 +186,7 @@ def notify_blocked(
         "reason": message,
     }
     try:
-        command_loop.send_to_commander(bridge_url, summary)
+        command_loop.send_to_commander(summary)
     except Exception:
         pass
 
@@ -195,7 +194,6 @@ def notify_blocked(
 def execute_task(
     task: dict[str, Any],
     cezar_url: str,
-    bridge_url: str,
 ) -> int:
     if task.get("enabled") is not True:
         print("No enabled Cezar command task.", flush=True)
@@ -247,7 +245,7 @@ def execute_task(
     save_processed(processed)
 
     if return_to_chatgpt:
-        command_loop.send_to_commander(bridge_url, summary)
+        command_loop.send_to_commander(summary)
 
     print(json.dumps(summary, ensure_ascii=False), flush=True)
     return 0 if summary["status"] == "PASS" else 2
@@ -260,10 +258,6 @@ def main() -> int:
         "--cezar-url",
         default=command_loop.DEFAULT_CEZAR_URL,
     )
-    parser.add_argument(
-        "--bridge-url",
-        default=command_loop.DEFAULT_BRIDGE_URL,
-    )
     args = parser.parse_args()
 
     control_repo = Path(args.control_repo).expanduser().resolve()
@@ -272,7 +266,6 @@ def main() -> int:
         return execute_task(
             task,
             args.cezar_url.rstrip("/"),
-            args.bridge_url.rstrip("/"),
         )
     except (DispatchError, command_loop.CommandLoopError, ValueError) as exc:
         task_id = "unknown"
@@ -288,7 +281,7 @@ def main() -> int:
                 "reason": str(exc),
             },
         )
-        notify_blocked(args.bridge_url.rstrip("/"), task_id, str(exc))
+        notify_blocked(task_id, str(exc))
         print(f"BLOCKED: {exc}", flush=True)
         return 1
 
