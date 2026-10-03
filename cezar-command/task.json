@@ -1,0 +1,10 @@
+{
+  "enabled": false,
+  "task_id": "replace-me",
+  "target_github": "rensei11/05-AI-voice",
+  "target_branch": "main",
+  "prompt": "Replace this with one self-contained task.",
+  "timeout_seconds": 3600,
+  "push": true,
+  "return_to_chatgpt": true
+}
