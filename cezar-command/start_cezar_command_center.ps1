@@ -158,13 +158,18 @@ try {
         Write-Host '4. If the extension already exists, press Reload instead.'
         Write-Host '5. Return to THIS ChatGPT conversation.'
         Write-Host '6. Click the button: This chat -> Cezar commander registration.'
-        Write-Host '7. After the button says registered, return here and press Enter.'
+        Write-Host '7. After the button says registered, this launcher continues automatically.'
         Write-Host ''
         Start-Process -FilePath $chrome -ArgumentList @('chrome://extensions/')
         Start-Process -FilePath explorer.exe -ArgumentList @($extensionRoot)
-        [void](Read-Host 'After registering THIS ChatGPT conversation, press Enter here')
 
-        $registration = Register-Commander
+        $registration = Invoke-Wsl -CommandArgs @(
+            'python3',
+            ($repo + '/cezar-command/commander_link.py'),
+            'wait-register',
+            '--setup-port',
+            '4398'
+        ) -Stage 'commander-wait-registration'
         if ($registration.ExitCode -ne 0) {
             throw 'Commander extension registration failed after the one-time Chrome setup.'
         }
