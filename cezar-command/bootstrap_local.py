@@ -526,8 +526,14 @@ def ensure_cezar(
     return health
 
 
-def prepare_agent_probe_repo(runtime_root: Path) -> Path:
+def prepare_agent_probe_repo(runtime_root: Path) -> tuple[Path, Path]:
     repo = runtime_root / "agent-proof-repo"
+    remote = runtime_root / "agent-proof-remote.git"
+
+    if not remote.is_dir():
+        remote.mkdir(parents=True, exist_ok=True)
+        run(["git", "init", "--bare", "-q"], cwd=remote)
+
     if not (repo / ".git").exists():
         repo.mkdir(parents=True, exist_ok=True)
         run(["git", "init", "-q", "-b", "main"], cwd=repo)
@@ -542,11 +548,23 @@ def prepare_agent_probe_repo(runtime_root: Path) -> Path:
         )
         run(["git", "add", "README.md"], cwd=repo)
         run(["git", "commit", "-q", "-m", "proof base"], cwd=repo)
+        run(["git", "remote", "add", "origin", str(remote)], cwd=repo)
+        run(["git", "push", "-u", "origin", "main"], cwd=repo)
     else:
+        origin = run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=repo,
+        ).stdout.strip()
+        if origin != str(remote):
+            raise BootstrapError(
+                f"Agent proof repository has an unexpected origin: {origin}"
+            )
         run(["git", "switch", "main"], cwd=repo)
-        run(["git", "reset", "--hard", "HEAD"], cwd=repo)
+        run(["git", "fetch", "origin", "main"], cwd=repo)
+        run(["git", "reset", "--hard", "origin/main"], cwd=repo)
         run(["git", "clean", "-fd"], cwd=repo)
-    return repo
+
+    return repo, remote
 
 
 def ensure_real_codex_probe(
@@ -574,7 +592,7 @@ def ensure_real_codex_probe(
         if current == expected:
             return
 
-    repo = prepare_agent_probe_repo(runtime_root)
+    repo, remote = prepare_agent_probe_repo(runtime_root)
     project_id = command_loop.ensure_project(CEZAR_URL, repo)
     task = (
         "This is an isolated command-center proof. "
@@ -622,6 +640,30 @@ def ensure_real_codex_probe(
     if "CEZAR_REAL_CODEX_PROOF_OK" not in patch:
         raise BootstrapError(
             "Real Codex proof file did not contain the required marker."
+        )
+
+    branch = str(summary.get("branch") or "").strip()
+    if not branch or branch == "main":
+        raise BootstrapError(
+            f"Real Codex proof did not expose a safe task branch: {branch or '(missing)'}"
+        )
+
+    command_loop.commit_and_push(
+        CEZAR_URL,
+        project_id,
+        run_id,
+    )
+    pushed = run(
+        [
+            "git",
+            f"--git-dir={remote}",
+            "show",
+            f"{branch}:CEZAR_PROOF.txt",
+        ],
+    ).stdout
+    if pushed != "CEZAR_REAL_CODEX_PROOF_OK\n":
+        raise BootstrapError(
+            "Real Codex proof branch was pushed but its file content was wrong."
         )
 
     try:
