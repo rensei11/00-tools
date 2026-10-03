@@ -236,12 +236,6 @@ def main() -> int:
             quoted_rid = urllib.parse.quote(rid, safe="")
             http_json(
                 "POST",
-                f"{base_url}/api/v1/p/{quoted_pid}/runs/{quoted_rid}/git/commit",
-                {"message": "Cezar smoke commit"},
-                timeout=10.0,
-            )
-            http_json(
-                "POST",
                 f"{base_url}/api/v1/p/{quoted_pid}/runs/{quoted_rid}/git/push",
                 {},
                 timeout=15.0,
