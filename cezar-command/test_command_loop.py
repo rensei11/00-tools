@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,6 +11,7 @@ from unittest import mock
 
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
 SPEC = importlib.util.spec_from_file_location("command_loop", HERE / "command_loop.py")
 assert SPEC is not None and SPEC.loader is not None
 command_loop = importlib.util.module_from_spec(SPEC)
@@ -94,12 +96,39 @@ class CommandLoopTests(unittest.TestCase):
         )
         self.assertEqual(done["status"], "PASS")
 
-    def test_conversation_id_from_url(self) -> None:
-        client = {"url": "https://chatgpt.com/c/01234567-89ab-cdef-0123-456789abcdef"}
-        self.assertEqual(
-            command_loop.conversation_id(client),
-            "01234567-89ab-cdef-0123-456789abcdef",
-        )
+    def test_register_commander_uses_independent_extension_link(self) -> None:
+        with mock.patch.object(
+            command_loop.commander_link,
+            "register_commander",
+            return_value={
+                "status": "REGISTERED",
+                "conversationUrl": "https://chatgpt.com/c/test",
+            },
+        ) as register:
+            result = command_loop.register_commander()
+        register.assert_called_once_with()
+        self.assertEqual(result["status"], "REGISTERED")
+
+    def test_send_to_commander_uses_independent_extension_link(self) -> None:
+        with mock.patch.object(
+            command_loop.commander_link,
+            "deliver_message",
+            return_value={
+                "status": "SUBMITTED",
+                "conversationUrl": "https://chatgpt.com/c/test",
+            },
+        ) as deliver:
+            command_loop.send_to_commander(
+                {
+                    "status": "PASS",
+                    "run_id": "run-123",
+                    "target_github": "rensei11/example",
+                }
+            )
+        message = deliver.call_args.args[0]
+        self.assertIn("[CEZAR-COMMAND-RESULT]", message)
+        self.assertIn("run-123", message)
+        self.assertIn("rensei11/example", message)
 
 
 if __name__ == "__main__":
