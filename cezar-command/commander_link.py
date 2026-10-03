@@ -268,6 +268,23 @@ def wait_for_human_registration(
     server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+
+    def probe_existing_registration() -> None:
+        try:
+            existing = register_commander()
+        except Exception:
+            return
+        try:
+            result_queue.put_nowait(existing)
+        except queue.Full:
+            return
+
+    probe_thread = threading.Thread(
+        target=probe_existing_registration,
+        daemon=True,
+    )
+    probe_thread.start()
+
     try:
         try:
             result = result_queue.get(timeout=timeout_seconds)
