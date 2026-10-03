@@ -23,6 +23,7 @@ CEZAR_VERSION = "0.13.0"
 NODE_VERSION = "22.23.2"
 NODE_DIST_BASE = "https://nodejs.org/dist"
 CEZAR_URL = "http://127.0.0.1:4322"
+COMMANDER_REGISTERED = False
 
 
 class BootstrapError(RuntimeError):
@@ -692,6 +693,8 @@ def write_runtime(
 
 
 def main() -> int:
+    global COMMANDER_REGISTERED
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--control-repo", required=True)
     parser.add_argument("--skip-commander-register", action="store_true")
@@ -705,10 +708,10 @@ def main() -> int:
 
     command("git")
     command("python3")
-    commander_registered = bool(args.skip_commander_register)
-    if not commander_registered:
+    COMMANDER_REGISTERED = bool(args.skip_commander_register)
+    if not COMMANDER_REGISTERED:
         commander = register_return_channel()
-        commander_registered = True
+        COMMANDER_REGISTERED = True
         print(
             "COMMANDER_REGISTERED="
             + str(commander.get("conversationUrl") or "unknown"),
@@ -757,7 +760,7 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
-        if locals().get("commander_registered"):
+        if COMMANDER_REGISTERED:
             try:
                 command_loop.send_to_commander(
                     {
