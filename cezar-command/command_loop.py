@@ -213,26 +213,22 @@ def wait_run(
     )
 
 
-def commit_and_push(
+def push_run(
     cezar_url: str,
     project_id: str,
     run_id: str,
 ) -> dict[str, Any]:
     project = urllib.parse.quote(project_id, safe="")
     run = urllib.parse.quote(run_id, safe="")
-    commit = http_json(
-        "POST",
-        f"{cezar_url}/api/v1/p/{project}/runs/{run}/git/commit",
-        {"message": f"Cezar audited task {run_id}"},
-        timeout=60.0,
-    )
     push = http_json(
         "POST",
         f"{cezar_url}/api/v1/p/{project}/runs/{run}/git/push",
         {},
         timeout=120.0,
     )
-    return {"commit": commit, "push": push}
+    if not isinstance(push, dict) or push.get("pushed") is not True:
+        raise CommandLoopError(f"Cezar did not confirm branch push: {push}")
+    return push
 
 
 def final_summary(
