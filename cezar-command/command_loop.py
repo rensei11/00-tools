@@ -298,10 +298,7 @@ def conversation_id(client: dict[str, Any]) -> str:
     return match.group(1) if match else ""
 
 
-def send_to_commander(
-    bridge_url: str,
-    summary: dict[str, Any],
-) -> None:
+def bridge_target(bridge_url: str) -> tuple[str, str]:
     status = http_json("GET", f"{bridge_url}/setup/status")
     if not isinstance(status, dict):
         raise CommandLoopError("ChatGPT Bridge status response is invalid.")
@@ -315,10 +312,45 @@ def send_to_commander(
 
     client_id = str(active.get("id") or "").strip()
     session_id = conversation_id(active)
-    if not client_id or not session_id:
+
+    if not session_id:
+        token = bridge_token()
+        sessions = http_json(
+            "GET",
+            f"{bridge_url}/sessions",
+            timeout=15.0,
+            token=token,
+        )
+        items = sessions.get("sessions") if isinstance(sessions, dict) else None
+        if (
+            isinstance(items, list)
+            and len(items) == 1
+            and isinstance(items[0], dict)
+        ):
+            session_id = str(
+                items[0].get("id")
+                or items[0].get("sessionId")
+                or ""
+            ).strip()
+
+    if not client_id:
+        raise CommandLoopError("Bridge active tab has no client id.")
+    if not session_id:
         raise CommandLoopError(
             "Could not identify the ChatGPT commander conversation."
         )
+    return client_id, session_id
+
+
+def verify_commander_bridge(bridge_url: str) -> tuple[str, str]:
+    return bridge_target(bridge_url)
+
+
+def send_to_commander(
+    bridge_url: str,
+    summary: dict[str, Any],
+) -> None:
+    client_id, session_id = bridge_target(bridge_url)
 
     message = (
         "[CEZAR-COMMAND-RESULT]\n"
@@ -344,7 +376,6 @@ def send_to_commander(
         raise CommandLoopError(
             f"ChatGPT Bridge did not accept the result: {result}"
         )
-
 
 def main() -> int:
     parser = argparse.ArgumentParser()
