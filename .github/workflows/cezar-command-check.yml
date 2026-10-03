@@ -164,6 +164,26 @@ jobs:
 
           print("one-time setup auto-continuation: OK")
           PY
+      - name: Reject redundant Cezar commit endpoint
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          bad = []
+          for name in (
+              "cezar-command/command_loop.py",
+              "cezar-command/dispatch.py",
+              "cezar-command/bootstrap_local.py",
+          ):
+              text = Path(name).read_text(encoding="utf-8")
+              if "/git/commit" in text or "commit_and_push" in text:
+                  bad.append(name)
+          if bad:
+              raise SystemExit(
+                  "Cezar already autosaves final worktree; redundant commit path remains: "
+                  + ", ".join(bad)
+              )
+          print("Cezar publication path: push finalized branch only")
+          PY
       - name: Install exact Cezar runtime
         run: npm install --prefix .cezar-smoke --no-audit --no-fund @open-mercato/cezar@0.13.0
       - name: Run exact Cezar API smoke test
