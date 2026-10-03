@@ -151,16 +151,21 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="cezar-command-smoke-") as raw:
         root = Path(raw)
         repo = root / "repo"
+        remote = root / "remote.git"
         home = root / "cez-home"
         repo.mkdir()
+        remote.mkdir()
         home.mkdir()
 
+        run(["git", "init", "--bare", "-q"], cwd=remote)
         run(["git", "init", "-q", "-b", "main"], cwd=repo)
         run(["git", "config", "user.email", "cezar-smoke@example.invalid"], cwd=repo)
         run(["git", "config", "user.name", "Cezar Smoke"], cwd=repo)
         (repo / "README.md").write_text("cezar smoke\n", encoding="utf-8")
         run(["git", "add", "README.md"], cwd=repo)
         run(["git", "commit", "-q", "-m", "smoke base"], cwd=repo)
+        run(["git", "remote", "add", "origin", str(remote)], cwd=repo)
+        run(["git", "push", "-u", "origin", "main"], cwd=repo)
 
         env = os.environ.copy()
         env.update(
@@ -208,7 +213,11 @@ def main() -> int:
                         {
                             "id": "probe",
                             "name": "Probe",
-                            "command": "python3 -c \"print('CEZAR_COMMAND_SMOKE_OK')\"",
+                            "command": (
+                                "python3 -c \"from pathlib import Path;"
+                                "Path('smoke-output.txt').write_text("
+                                "'CEZAR_COMMAND_SMOKE_OK\\n')\""
+                            ),
                         }
                     ],
                     "worktree": True,
@@ -219,6 +228,36 @@ def main() -> int:
             )
             rid = run_id(created)
             finished = wait_run(base_url, pid, rid, 30.0)
+
+            branch = str(finished.get("branch") or "").strip()
+            if not branch or branch == "main":
+                raise SmokeError(f"smoke run exposed invalid task branch: {branch!r}")
+
+            quoted_rid = urllib.parse.quote(rid, safe="")
+            http_json(
+                "POST",
+                f"{base_url}/api/v1/p/{quoted_pid}/runs/{quoted_rid}/git/commit",
+                {"message": "Cezar smoke commit"},
+                timeout=10.0,
+            )
+            http_json(
+                "POST",
+                f"{base_url}/api/v1/p/{quoted_pid}/runs/{quoted_rid}/git/push",
+                {},
+                timeout=15.0,
+            )
+            pushed = run(
+                [
+                    "git",
+                    f"--git-dir={remote}",
+                    "show",
+                    f"{branch}:smoke-output.txt",
+                ]
+            ).stdout
+            if pushed != "CEZAR_COMMAND_SMOKE_OK\n":
+                raise SmokeError(
+                    "Cezar smoke commit/push did not preserve the expected file."
+                )
 
             retry_created = http_json(
                 "POST",
@@ -263,6 +302,7 @@ def main() -> int:
                         "project_id": pid,
                         "run_id": rid,
                         "cezar_status": finished.get("status"),
+                        "pushed_branch": branch,
                         "retry_run_id": retry_rid,
                         "retry_status": retry_finished.get("status"),
                     }
