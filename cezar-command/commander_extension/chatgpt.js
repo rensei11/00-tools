@@ -144,7 +144,7 @@
   function conversationUrl() {
     try {
       const url = new URL(location.href);
-      const match = url.pathname.match(/^\/c\/([^/]+)/);
+      const match = url.pathname.match(/\/c\/([^/]+)/);
       return match ? "https://chatgpt.com/c/" + match[1] : "";
     } catch {
       return "";
@@ -210,7 +210,34 @@
     document.documentElement.appendChild(button);
   }
 
-  installRegistrationButton().catch(() => {});
+  let lastRegistrationUrl = "";
+
+  function refreshRegistrationButton() {
+    const current = conversationUrl();
+    if (!current) {
+      document.getElementById("rensei-cezar-commander-register")?.remove();
+      lastRegistrationUrl = "";
+      return;
+    }
+    if (current === lastRegistrationUrl) {
+      return;
+    }
+    lastRegistrationUrl = current;
+    installRegistrationButton().catch(() => {});
+  }
+
+  refreshRegistrationButton();
+
+  const routeObserver = new MutationObserver(() => {
+    refreshRegistrationButton();
+  });
+  routeObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+  });
+
+  window.addEventListener("popstate", refreshRegistrationButton);
+  window.addEventListener("hashchange", refreshRegistrationButton);
 
   function waitForSubmissionAccepted(composer, timeoutMs = 10000) {
     return new Promise((resolve, reject) => {
