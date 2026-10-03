@@ -22,8 +22,16 @@ function Invoke-Wsl {
 
     Write-Log ($Stage + ': START')
     $fullArgs = @('-d', 'Ubuntu', '--') + $CommandArgs
-    $output = & wsl.exe @fullArgs 2>&1
-    $rc = $LASTEXITCODE
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = & wsl.exe @fullArgs 2>&1
+        $rc = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
 
     foreach ($line in @($output)) {
         if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
