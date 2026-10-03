@@ -1,5 +1,6 @@
 const COMMANDER_KEY = "cezarCommanderTab";
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
+const SETUP_NOTIFY_URL = "http://127.0.0.1:4398/register";
 
 function canonicalChatUrl(value) {
   try {
@@ -53,6 +54,19 @@ async function storedCommander() {
   }
 }
 
+async function notifySetupWaiter(conversationUrl) {
+  await fetch(SETUP_NOTIFY_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      status: "REGISTERED",
+      conversationUrl,
+      extensionVersion: EXTENSION_VERSION,
+    }),
+    cache: "no-store",
+  }).catch(() => {});
+}
+
 async function registerCurrentChat(sender, requestedUrl) {
   const tab = sender.tab;
   const url = canonicalChatUrl(requestedUrl || tab?.url);
@@ -82,6 +96,8 @@ async function registerCurrentChat(sender, requestedUrl) {
       conversationUrl: url,
     }).catch(() => {});
   }
+
+  await notifySetupWaiter(url);
 
   return {
     registered: true,
