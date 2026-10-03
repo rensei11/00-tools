@@ -82,6 +82,29 @@ class CommandLoopTests(unittest.TestCase):
             with mock.patch.object(command_loop, "http_json", return_value=response):
                 self.assertEqual(command_loop.discover_project("http://cezar", repo), "target")
 
+    def test_push_run_uses_cezar_finalized_branch_without_extra_commit(self) -> None:
+        with mock.patch.object(
+            command_loop,
+            "http_json",
+            return_value={
+                "pushed": True,
+                "branch": "cez/test",
+                "remote": "origin",
+                "upstreamSet": True,
+            },
+        ) as request:
+            result = command_loop.push_run(
+                "http://cezar",
+                "project",
+                "run-1",
+            )
+
+        self.assertTrue(result["pushed"])
+        request.assert_called_once()
+        args = request.call_args.args
+        self.assertEqual(args[0], "POST")
+        self.assertTrue(args[1].endswith("/git/push"))
+
     def test_final_summary_never_turns_failed_run_into_pass(self) -> None:
         failed = command_loop.final_summary(
             {"status": "failed", "steps": [{"id": "audit-gate", "status": "failed"}]},
