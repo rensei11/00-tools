@@ -362,8 +362,12 @@ def send_to_commander(
         "[CEZAR-COMMAND-RESULT]\n"
         + json.dumps(summary, ensure_ascii=False, indent=2)
         + "\nImplementation -> independent audit -> bounded retry loop finished. "
-        "Use this machine result as the handoff. "
-        "Do not ask the user to copy Codex output."
+        "Treat this as an automatic handoff, not a user message to relay. "
+        "If status is PASS, inspect the named GitHub target and pushed task branch with the "
+        "connected GitHub tools, verify repository checks, and merge or apply it when the "
+        "original task is actually satisfied. If status is FAIL/BLOCKED, diagnose and continue "
+        "through AI-accessible paths. Do not ask the user to copy Codex output or choose an "
+        "implementation route."
     )
     result = http_json(
         "POST",
