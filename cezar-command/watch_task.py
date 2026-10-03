@@ -10,7 +10,6 @@ from pathlib import Path
 def run_dispatch(
     control_repo: Path,
     cezar_url: str,
-    bridge_url: str,
 ) -> int:
     script = control_repo / "cezar-command" / "dispatch.py"
     completed = subprocess.run(
@@ -21,8 +20,6 @@ def run_dispatch(
             str(control_repo),
             "--cezar-url",
             cezar_url,
-            "--bridge-url",
-            bridge_url,
         ],
         cwd=str(control_repo),
         check=False,
@@ -34,7 +31,6 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--control-repo", required=True)
     parser.add_argument("--cezar-url", required=True)
-    parser.add_argument("--bridge-url", required=True)
     parser.add_argument("--interval", type=int, default=20)
     args = parser.parse_args()
 
@@ -51,7 +47,6 @@ def main() -> int:
             run_dispatch(
                 control_repo,
                 args.cezar_url.rstrip("/"),
-                args.bridge_url.rstrip("/"),
             )
         except Exception as exc:
             print(f"WATCHER=ERROR: {exc}", flush=True)
