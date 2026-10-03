@@ -237,6 +237,8 @@ def ensure_git_push_auth(control_repo: Path) -> None:
     if remote != "https://github.com/rensei11/00-tools.git":
         raise BootstrapError(f"Unexpected control repository origin: {remote}")
 
+    git_env = os.environ.copy()
+    git_env["GIT_TERMINAL_PROMPT"] = "0"
     completed = run(
         [
             "git",
@@ -246,6 +248,7 @@ def ensure_git_push_auth(control_repo: Path) -> None:
             "HEAD:refs/heads/cezar-auth-probe",
         ],
         cwd=control_repo,
+        env=git_env,
     )
     output = (completed.stdout + "\n" + completed.stderr).strip()
     if "fatal:" in output.lower() or "error:" in output.lower():
@@ -540,10 +543,11 @@ def main() -> int:
     check_node()
     codex_bin = ensure_codex_wrapper(runtime_root)
 
+    verify_return_channel()
+
     binary = ensure_cezar_package(runtime_root)
     ensure_git_push_auth(control_repo)
     ensure_runtime_smoke(control_repo, runtime_root, binary)
-    verify_return_channel()
 
     health = ensure_cezar(control_repo, runtime_root, codex_bin)
     ensure_real_codex_probe(control_repo, runtime_root, codex_bin)
@@ -576,7 +580,7 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except BootstrapError as exc:
+    except Exception as exc:
         try:
             command_loop.send_to_commander(
                 BRIDGE_URL,
