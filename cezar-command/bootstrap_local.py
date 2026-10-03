@@ -210,6 +210,31 @@ def ensure_cezar_package(runtime_root: Path) -> Path:
     return binary
 
 
+def ensure_git_push_auth(control_repo: Path) -> None:
+    remote = run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=control_repo,
+    ).stdout.strip()
+    if remote != "https://github.com/rensei11/00-tools.git":
+        raise BootstrapError(f"Unexpected control repository origin: {remote}")
+
+    completed = run(
+        [
+            "git",
+            "push",
+            "--dry-run",
+            "origin",
+            "HEAD:refs/heads/cezar-auth-probe",
+        ],
+        cwd=control_repo,
+    )
+    output = (completed.stdout + "\n" + completed.stderr).strip()
+    if "fatal:" in output.lower() or "error:" in output.lower():
+        raise BootstrapError(
+            "GitHub push authentication dry-run failed: " + output[:1200]
+        )
+
+
 def ensure_runtime_smoke(
     control_repo: Path,
     runtime_root: Path,
@@ -496,6 +521,7 @@ def main() -> int:
         raise BootstrapError("Codex CLI is not available.")
 
     binary = ensure_cezar_package(runtime_root)
+    ensure_git_push_auth(control_repo)
     ensure_runtime_smoke(control_repo, runtime_root, binary)
     verify_return_channel()
 
