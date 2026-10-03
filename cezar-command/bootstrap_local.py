@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
+import tarfile
 import time
 import urllib.error
 import urllib.parse
@@ -17,6 +20,8 @@ import command_loop
 
 CEZAR_PACKAGE = "@open-mercato/cezar"
 CEZAR_VERSION = "0.13.0"
+NODE_VERSION = "22.23.2"
+NODE_DIST_BASE = "https://nodejs.org/dist"
 CEZAR_URL = "http://127.0.0.1:4322"
 BRIDGE_URL = "http://127.0.0.1:8080"
 
@@ -66,12 +71,106 @@ def version_tuple(text: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
 
 
-def check_node() -> None:
-    node = command("node")
-    command("npm")
-    version = run([node, "--version"]).stdout.strip()
+def node_arch() -> str:
+    machine = platform.machine().lower()
+    if machine in {"x86_64", "amd64"}:
+        return "x64"
+    if machine in {"aarch64", "arm64"}:
+        return "arm64"
+    raise BootstrapError(f"Unsupported Linux architecture for managed Node.js: {machine}")
+
+
+def download_bytes(url: str, timeout: float = 60.0) -> bytes:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "rensei-cezar-command-center/1"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        raise BootstrapError(f"HTTP {exc.code} while downloading {url}") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise BootstrapError(f"Could not download {url}: {exc}") from exc
+
+
+def ensure_managed_node(runtime_root: Path) -> Path:
+    arch = node_arch()
+    folder = f"node-v{NODE_VERSION}-linux-{arch}"
+    node_root = runtime_root / folder
+    node_bin = node_root / "bin" / "node"
+    npm_bin = node_root / "bin" / "npm"
+
+    if node_bin.is_file() and npm_bin.exists():
+        version = run([str(node_bin), "--version"]).stdout.strip()
+        if version_tuple(version) >= (20, 0, 0):
+            return node_root
+
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    downloads = runtime_root / "downloads"
+    downloads.mkdir(parents=True, exist_ok=True)
+
+    archive_name = folder + ".tar.xz"
+    archive_path = downloads / archive_name
+    archive_url = f"{NODE_DIST_BASE}/v{NODE_VERSION}/{archive_name}"
+    sums_url = f"{NODE_DIST_BASE}/v{NODE_VERSION}/SHASUMS256.txt"
+
+    sums_text = download_bytes(sums_url).decode("utf-8", errors="strict")
+    expected_hash = ""
+    for line in sums_text.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[-1] == archive_name:
+            expected_hash = parts[0].strip().lower()
+            break
+    if not expected_hash:
+        raise BootstrapError(
+            f"Official Node.js checksum was not found for {archive_name}."
+        )
+
+    archive_bytes = download_bytes(archive_url, timeout=120.0)
+    actual_hash = hashlib.sha256(archive_bytes).hexdigest().lower()
+    if actual_hash != expected_hash:
+        raise BootstrapError(
+            "Managed Node.js download failed SHA256 verification."
+        )
+
+    archive_path.write_bytes(archive_bytes)
+    extract_root = runtime_root / (folder + ".extracting")
+    if extract_root.exists():
+        shutil.rmtree(extract_root)
+    extract_root.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with tarfile.open(archive_path, mode="r:xz") as archive:
+            archive.extractall(extract_root, filter="data")
+        extracted = extract_root / folder
+        if not (extracted / "bin" / "node").is_file():
+            raise BootstrapError("Managed Node.js archive did not contain node.")
+        if node_root.exists():
+            shutil.rmtree(node_root)
+        extracted.rename(node_root)
+    finally:
+        archive_path.unlink(missing_ok=True)
+        if extract_root.exists():
+            shutil.rmtree(extract_root, ignore_errors=True)
+
+    version = run([str(node_bin), "--version"]).stdout.strip()
     if version_tuple(version) < (20, 0, 0):
-        raise BootstrapError(f"Node.js 20+ is required; found {version}")
+        raise BootstrapError(
+            f"Managed Node.js 20+ is required; installed {version}"
+        )
+    if not npm_bin.exists():
+        raise BootstrapError("Managed Node.js installation has no npm.")
+    return node_root
+
+
+def apply_managed_node(node_root: Path) -> None:
+    node_bin_dir = str(node_root / "bin")
+    current = os.environ.get("PATH", "")
+    paths = current.split(os.pathsep) if current else []
+    if node_bin_dir not in paths:
+        os.environ["PATH"] = node_bin_dir + (os.pathsep + current if current else "")
 
 
 def ensure_codex_wrapper(runtime_root: Path) -> Path:
@@ -368,6 +467,8 @@ def ensure_cezar(
     binary = ensure_cezar_package(runtime_root)
     expected_config = {
         "cezarVersion": CEZAR_VERSION,
+        "nodeVersion": NODE_VERSION,
+        "nodePath": os.environ.get("PATH", "").split(os.pathsep)[0],
         "codexBin": str(codex_bin),
         "codexNetwork": "0",
         "port": 4322,
@@ -583,6 +684,7 @@ def write_runtime(
         "bridgeUrl": BRIDGE_URL,
         "watcherPid": watcher_pid,
         "cezarVersion": str(health.get("version") or CEZAR_VERSION),
+        "nodeVersion": NODE_VERSION,
         "mode": "local-task-watch",
     }
     path = runtime_root / "runtime.json"
@@ -605,7 +707,10 @@ def main() -> int:
 
     command("git")
     command("python3")
-    check_node()
+    node_root = ensure_managed_node(runtime_root)
+    apply_managed_node(node_root)
+    command("node")
+    command("npm")
     codex_bin = ensure_codex_wrapper(runtime_root)
 
     verify_return_channel()
