@@ -310,6 +310,121 @@ def ensure_cezar(control_repo: Path, runtime_root: Path) -> dict[str, Any]:
     return wait_health()
 
 
+def prepare_agent_probe_repo(runtime_root: Path) -> Path:
+    repo = runtime_root / "agent-proof-repo"
+    if not (repo / ".git").exists():
+        repo.mkdir(parents=True, exist_ok=True)
+        run(["git", "init", "-q", "-b", "main"], cwd=repo)
+        run(
+            ["git", "config", "user.email", "cezar-proof@example.invalid"],
+            cwd=repo,
+        )
+        run(["git", "config", "user.name", "Cezar Proof"], cwd=repo)
+        (repo / "README.md").write_text(
+            "isolated cezar proof repository\n",
+            encoding="utf-8",
+        )
+        run(["git", "add", "README.md"], cwd=repo)
+        run(["git", "commit", "-q", "-m", "proof base"], cwd=repo)
+    else:
+        run(["git", "switch", "main"], cwd=repo)
+        run(["git", "reset", "--hard", "HEAD"], cwd=repo)
+        run(["git", "clean", "-fd"], cwd=repo)
+    return repo
+
+
+def ensure_real_codex_probe(
+    control_repo: Path,
+    runtime_root: Path,
+) -> None:
+    marker = runtime_root / "real-codex-proof-pass.json"
+    revision = run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=control_repo,
+    ).stdout.strip()
+    codex_bin = check_codex()
+    codex_version = run([codex_bin, "--version"]).stdout.strip()
+    expected = {
+        "controlRevision": revision,
+        "cezarVersion": CEZAR_VERSION,
+        "codexVersion": codex_version,
+    }
+
+    if marker.is_file():
+        try:
+            current = json.loads(marker.read_text(encoding="utf-8"))
+        except Exception:
+            current = {}
+        if current == expected:
+            return
+
+    repo = prepare_agent_probe_repo(runtime_root)
+    project_id = command_loop.ensure_project(CEZAR_URL, repo)
+    task = (
+        "This is an isolated command-center proof. "
+        "Create exactly one file named CEZAR_PROOF.txt. "
+        "Its complete content must be exactly CEZAR_REAL_CODEX_PROOF_OK followed by one newline. "
+        "Do not modify any other file."
+    )
+    created = command_loop.start_run(CEZAR_URL, project_id, task)
+    run_id = command_loop.run_id_from(created)
+    record = command_loop.wait_run(
+        CEZAR_URL,
+        project_id,
+        run_id,
+        240,
+    )
+    summary = command_loop.final_summary(record, run_id, project_id)
+    if summary.get("status") != "PASS":
+        raise BootstrapError(
+            "Real Codex implementation/audit proof did not pass: "
+            + json.dumps(summary, ensure_ascii=True)[:1600]
+        )
+
+    quoted_project = urllib.parse.quote(project_id, safe="")
+    quoted_run = urllib.parse.quote(run_id, safe="")
+    changes = http_json(
+        "GET",
+        f"{CEZAR_URL}/api/v1/p/{quoted_project}/runs/{quoted_run}/changes",
+        timeout=15.0,
+    )
+    files = changes.get("files") if isinstance(changes, dict) else None
+    if not isinstance(files, list):
+        raise BootstrapError(f"Real Codex proof returned invalid changes: {changes}")
+
+    relevant = [
+        item
+        for item in files
+        if isinstance(item, dict)
+    ]
+    paths = [str(item.get("path") or "") for item in relevant]
+    if paths != ["CEZAR_PROOF.txt"]:
+        raise BootstrapError(
+            f"Real Codex proof changed unexpected files: {paths}"
+        )
+    patch = str(relevant[0].get("patch") or "")
+    if "CEZAR_REAL_CODEX_PROOF_OK" not in patch:
+        raise BootstrapError(
+            "Real Codex proof file did not contain the required marker."
+        )
+
+    try:
+        http_json(
+            "POST",
+            f"{CEZAR_URL}/api/v1/p/{quoted_project}/runs/{quoted_run}/remove-worktree",
+            {},
+            timeout=30.0,
+        )
+    except Exception:
+        pass
+
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    marker.write_text(
+        json.dumps(expected, ensure_ascii=True, indent=2) + "\n",
+        encoding="ascii",
+    )
+
+
 def ensure_watcher(control_repo: Path, runtime_root: Path) -> int:
     pid_path = runtime_root / "watcher.pid"
     if process_alive(pid_path):
@@ -385,6 +500,7 @@ def main() -> int:
     verify_return_channel()
 
     health = ensure_cezar(control_repo, runtime_root)
+    ensure_real_codex_probe(control_repo, runtime_root)
     watcher_pid = ensure_watcher(control_repo, runtime_root)
     write_runtime(
         runtime_root,
