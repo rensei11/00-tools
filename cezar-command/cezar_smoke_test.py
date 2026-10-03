@@ -219,6 +219,43 @@ def main() -> int:
             )
             rid = run_id(created)
             finished = wait_run(base_url, pid, rid, 30.0)
+
+            retry_created = http_json(
+                "POST",
+                f"{base_url}/api/v1/p/{quoted_pid}/runs",
+                {
+                    "task": "Cezar retry smoke test",
+                    "steps": [
+                        {
+                            "id": "prepare",
+                            "name": "Prepare attempt",
+                            "command": (
+                                "python3 -c \"from pathlib import Path;"
+                                "p=Path('retry-count.txt');"
+                                "n=int(p.read_text())+1 if p.exists() else 1;"
+                                "p.write_text(str(n))\""
+                            ),
+                        },
+                        {
+                            "id": "gate",
+                            "name": "Fail once then pass",
+                            "command": (
+                                "python3 -c \"from pathlib import Path;import sys;"
+                                "n=int(Path('retry-count.txt').read_text());"
+                                "sys.exit(0 if n>=2 else 1)\""
+                            ),
+                            "onFail": {"retry": "prepare", "max": 2},
+                        },
+                    ],
+                    "worktree": True,
+                    "autonomous": True,
+                    "generateFollowups": False,
+                },
+                timeout=10.0,
+            )
+            retry_rid = run_id(retry_created)
+            retry_finished = wait_run(base_url, pid, retry_rid, 30.0)
+
             print(
                 json.dumps(
                     {
@@ -226,6 +263,8 @@ def main() -> int:
                         "project_id": pid,
                         "run_id": rid,
                         "cezar_status": finished.get("status"),
+                        "retry_run_id": retry_rid,
+                        "retry_status": retry_finished.get("status"),
                     }
                 )
             )
