@@ -74,13 +74,32 @@ def check_node() -> None:
         raise BootstrapError(f"Node.js 20+ is required; found {version}")
 
 
-def check_codex() -> str:
-    codex = command("codex")
-    completed = run([codex, "--version"])
+def ensure_codex_wrapper(runtime_root: Path) -> Path:
+    runtime_root.mkdir(parents=True, exist_ok=True)
+    wrapper = runtime_root / "codex-login-wrapper.sh"
+    content = """#!/usr/bin/env bash
+set -euo pipefail
+if [ -f "$HOME/.profile" ]; then
+    . "$HOME/.profile"
+fi
+if [ -f "$HOME/.bashrc" ]; then
+    . "$HOME/.bashrc" >/dev/null 2>&1 || true
+fi
+CODEX_BIN="$(command -v codex || true)"
+if [ -z "$CODEX_BIN" ]; then
+    echo "Codex command was not found after loading the Ubuntu login environment." >&2
+    exit 127
+fi
+exec "$CODEX_BIN" "$@"
+"""
+    wrapper.write_text(content, encoding="ascii")
+    wrapper.chmod(0o755)
+
+    completed = run([str(wrapper), "--version"])
     version = completed.stdout.strip() or completed.stderr.strip()
     if not version:
-        raise BootstrapError("Codex CLI returned no version.")
-    return codex
+        raise BootstrapError("Codex CLI returned no version through the login wrapper.")
+    return wrapper
 
 
 def http_json(
@@ -295,7 +314,11 @@ def verify_return_channel() -> None:
         ) from exc
 
 
-def ensure_cezar(control_repo: Path, runtime_root: Path) -> dict[str, Any]:
+def ensure_cezar(
+    control_repo: Path,
+    runtime_root: Path,
+    codex_bin: Path,
+) -> dict[str, Any]:
     pid_path = runtime_root / "cezar.pid"
     health = try_http_json(f"{CEZAR_URL}/api/v1/health")
 
@@ -307,12 +330,11 @@ def ensure_cezar(control_repo: Path, runtime_root: Path) -> dict[str, Any]:
         return health if isinstance(health, dict) else {}
 
     binary = ensure_cezar_package(runtime_root)
-    codex_bin = check_codex()
     env = os.environ.copy()
     env.update(
         {
             "CEZ_AUTOMATIONS": "1",
-            "CEZ_CODEX_BIN": codex_bin,
+            "CEZ_CODEX_BIN": str(codex_bin),
             "CEZ_CODEX_NETWORK": "0",
             "CEZ_NO_BANNER": "1",
         }
@@ -361,14 +383,14 @@ def prepare_agent_probe_repo(runtime_root: Path) -> Path:
 def ensure_real_codex_probe(
     control_repo: Path,
     runtime_root: Path,
+    codex_bin: Path,
 ) -> None:
     marker = runtime_root / "real-codex-proof-pass.json"
     revision = run(
         ["git", "rev-parse", "HEAD"],
         cwd=control_repo,
     ).stdout.strip()
-    codex_bin = check_codex()
-    codex_version = run([codex_bin, "--version"]).stdout.strip()
+    codex_version = run([str(codex_bin), "--version"]).stdout.strip()
     expected = {
         "controlRevision": revision,
         "cezarVersion": CEZAR_VERSION,
@@ -516,17 +538,15 @@ def main() -> int:
     command("git")
     command("python3")
     check_node()
-    codex_bin = check_codex()
-    if not codex_bin:
-        raise BootstrapError("Codex CLI is not available.")
+    codex_bin = ensure_codex_wrapper(runtime_root)
 
     binary = ensure_cezar_package(runtime_root)
     ensure_git_push_auth(control_repo)
     ensure_runtime_smoke(control_repo, runtime_root, binary)
     verify_return_channel()
 
-    health = ensure_cezar(control_repo, runtime_root)
-    ensure_real_codex_probe(control_repo, runtime_root)
+    health = ensure_cezar(control_repo, runtime_root, codex_bin)
+    ensure_real_codex_probe(control_repo, runtime_root, codex_bin)
     watcher_pid = ensure_watcher(control_repo, runtime_root)
     write_runtime(
         runtime_root,
