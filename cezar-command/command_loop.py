@@ -79,6 +79,25 @@ def discover_project(cezar_url: str, repo_path: Path) -> str:
     )
 
 
+def ensure_project(cezar_url: str, repo_path: Path) -> str:
+    try:
+        return discover_project(cezar_url, repo_path)
+    except CommandLoopError:
+        created = http_json(
+            "POST",
+            f"{cezar_url}/api/v1/projects",
+            {"root": str(repo_path.resolve())},
+            timeout=60.0,
+        )
+        project = created.get("project") if isinstance(created, dict) else None
+        project_id = str(project.get("id") or "").strip() if isinstance(project, dict) else ""
+        if not project_id:
+            raise CommandLoopError(
+                f"Cezar could not register target repository: {created}"
+            )
+        return project_id
+
+
 def workflow(task: str) -> dict[str, Any]:
     audit_file = ".cezar-command-audit.json"
     implement_prompt = (
@@ -351,7 +370,7 @@ def main() -> int:
         raise CommandLoopError("Task file is empty.")
 
     cezar_url = args.cezar_url.rstrip("/")
-    project_id = discover_project(cezar_url, repo)
+    project_id = ensure_project(cezar_url, repo)
     created = start_run(cezar_url, project_id, task)
     run_id = run_id_from(created)
     print(f"run_id={run_id}", flush=True)
