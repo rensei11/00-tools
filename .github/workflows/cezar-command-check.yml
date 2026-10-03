@@ -29,9 +29,19 @@ jobs:
             cezar-command/command_loop.py \
             cezar-command/dispatch.py \
             cezar-command/bootstrap_local.py \
+            cezar-command/watch_task.py \
             cezar-command/test_command_loop.py
       - name: Run command loop tests
         run: python -m unittest cezar-command/test_command_loop.py
+      - name: Verify bootstrap has no GitHub CLI dependency
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          text = Path("cezar-command/bootstrap_local.py").read_text(encoding="utf-8")
+          if 'command("gh")' in text or "ensure_trigger_label" in text or "ensure_automation" in text:
+              raise SystemExit("legacy GitHub CLI automation path is still present")
+          print("bootstrap dependency check: OK")
+          PY
       - name: Verify Windows launcher files are ASCII
         run: |
           python - <<'PY'
