@@ -151,8 +151,19 @@
     }
   }
 
-  function installRegistrationButton() {
+  async function installRegistrationButton() {
     if (!conversationUrl() || document.getElementById("rensei-cezar-commander-register")) {
+      return;
+    }
+
+    try {
+      const status = await chrome.runtime.sendMessage({
+        type: "cezar_commander_status",
+      });
+      if (status?.registered) {
+        return;
+      }
+    } catch {
       return;
     }
 
@@ -199,9 +210,13 @@
     document.documentElement.appendChild(button);
   }
 
-  installRegistrationButton();
+  installRegistrationButton().catch(() => {});
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type === "cezar_commander_registered") {
+      document.getElementById("rensei-cezar-commander-register")?.remove();
+      return;
+    }
     if (message?.type === "cezar_commander_probe") {
       sendResponse({
         ready: true,
