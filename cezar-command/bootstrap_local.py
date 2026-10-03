@@ -23,7 +23,6 @@ CEZAR_VERSION = "0.13.0"
 NODE_VERSION = "22.23.2"
 NODE_DIST_BASE = "https://nodejs.org/dist"
 CEZAR_URL = "http://127.0.0.1:4322"
-BRIDGE_URL = "http://127.0.0.1:8080"
 
 
 class BootstrapError(RuntimeError):
@@ -448,12 +447,12 @@ def ensure_runtime_smoke(
     )
 
 
-def verify_return_channel() -> None:
+def register_return_channel() -> dict[str, Any]:
     try:
-        command_loop.verify_commander_bridge(BRIDGE_URL)
+        return command_loop.register_commander()
     except Exception as exc:
         raise BootstrapError(
-            f"ChatGPT return channel is not ready: {exc}"
+            f"ChatGPT commander registration is not ready: {exc}"
         ) from exc
 
 
@@ -660,8 +659,6 @@ def ensure_watcher(control_repo: Path, runtime_root: Path) -> int:
             str(control_repo),
             "--cezar-url",
             CEZAR_URL,
-            "--bridge-url",
-            BRIDGE_URL,
             "--interval",
             "20",
         ],
@@ -681,7 +678,7 @@ def write_runtime(
     payload = {
         "controlRepo": str(control_repo),
         "cezarUrl": CEZAR_URL,
-        "bridgeUrl": BRIDGE_URL,
+        "commanderLink": "chrome-extension",
         "watcherPid": watcher_pid,
         "cezarVersion": str(health.get("version") or CEZAR_VERSION),
         "nodeVersion": NODE_VERSION,
@@ -707,13 +704,20 @@ def main() -> int:
 
     command("git")
     command("python3")
+    commander_registered = False
+    commander = register_return_channel()
+    commander_registered = True
+    print(
+        "COMMANDER_REGISTERED="
+        + str(commander.get("conversationUrl") or "unknown"),
+        flush=True,
+    )
+
     node_root = ensure_managed_node(runtime_root)
     apply_managed_node(node_root)
     command("node")
     command("npm")
     codex_bin = ensure_codex_wrapper(runtime_root)
-
-    verify_return_channel()
 
     binary = ensure_cezar_package(runtime_root)
     ensure_git_push_auth(control_repo)
@@ -736,7 +740,7 @@ def main() -> int:
         "watcher_pid": watcher_pid,
     }
     try:
-        command_loop.send_to_commander(BRIDGE_URL, summary)
+        command_loop.send_to_commander(summary)
         print("CHATGPT_RETURN=SUBMITTED")
     except Exception as exc:
         print(f"CHATGPT_RETURN=BLOCKED: {exc}")
@@ -751,16 +755,16 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except Exception as exc:
-        try:
-            command_loop.send_to_commander(
-                BRIDGE_URL,
-                {
-                    "status": "BLOCKED",
-                    "component": "cezar-command-center",
-                    "reason": str(exc),
-                },
-            )
-        except Exception:
-            pass
+        if locals().get("commander_registered"):
+            try:
+                command_loop.send_to_commander(
+                    {
+                        "status": "BLOCKED",
+                        "component": "cezar-command-center",
+                        "reason": str(exc),
+                    }
+                )
+            except Exception:
+                pass
         print(f"CEZAR_COMMAND_CENTER=BLOCKED\n{exc}", file=sys.stderr)
         raise SystemExit(1)
