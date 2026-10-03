@@ -65,3 +65,37 @@ jobs:
                   raise SystemExit(f"{path} contains non-ASCII bytes")
               print(f"{path}: ASCII OK")
           PY
+
+  windows-powershell:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse launcher with Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path "cezar-command/start_cezar_command_center.ps1"),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+          Write-Host "Windows PowerShell 5.1 parse: OK"
+      - name: Verify launcher ASCII on Windows
+        shell: powershell
+        run: |
+          $files = @(
+            "cezar-command-center.cmd",
+            "cezar-command/start_cezar_command_center.ps1"
+          )
+          foreach ($file in $files) {
+            $bytes = [IO.File]::ReadAllBytes((Resolve-Path $file))
+            if (($bytes | Where-Object { $_ -gt 127 }).Count -gt 0) {
+              throw "$file contains non-ASCII bytes"
+            }
+          }
+          Write-Host "Windows launcher ASCII: OK"
