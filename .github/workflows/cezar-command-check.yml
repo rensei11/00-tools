@@ -85,6 +85,26 @@ jobs:
             exit 1
           }
           Write-Host "Windows PowerShell 5.1 parse: OK"
+      - name: Prove harmless native stderr does not abort launcher logic
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $previous = $ErrorActionPreference
+          try {
+            $ErrorActionPreference = 'Continue'
+            $output = & cmd.exe /d /c "echo harmless-progress 1>&2 & exit /b 0" 2>&1
+            $rc = $LASTEXITCODE
+          }
+          finally {
+            $ErrorActionPreference = $previous
+          }
+          if ($rc -ne 0) {
+            throw "Native stderr probe returned exit code $rc"
+          }
+          if ((@($output) -join [Environment]::NewLine) -notmatch 'harmless-progress') {
+            throw "Native stderr probe output was not captured"
+          }
+          Write-Host "Native stderr handling: OK"
       - name: Verify launcher ASCII on Windows
         shell: powershell
         run: |
