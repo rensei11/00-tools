@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -23,9 +24,12 @@ def run(
     cwd: Path | None = None,
     check: bool = True,
 ) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
     completed = subprocess.run(
         args,
         cwd=str(cwd) if cwd else None,
+        env=env,
         check=False,
         text=True,
         encoding="utf-8",
@@ -225,6 +229,7 @@ def execute_task(
     )
     summary = command_loop.final_summary(run_record, run_id, project_id)
     summary["task_id"] = task_id
+    summary["target_github"] = task.get("target_github")
     summary["target_repo"] = str(repo)
     summary["target_branch"] = branch
 
