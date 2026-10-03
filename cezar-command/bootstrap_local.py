@@ -13,6 +13,8 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+import command_loop
+
 CEZAR_PACKAGE = "@open-mercato/cezar"
 CEZAR_VERSION = "0.13.0"
 CEZAR_URL = "http://127.0.0.1:4322"
@@ -391,6 +393,19 @@ def main() -> int:
         health,
     )
 
+    summary = {
+        "status": "READY",
+        "component": "cezar-command-center",
+        "cezar_url": CEZAR_URL,
+        "automation_id": automation_id,
+        "trigger_label": TRIGGER_LABEL,
+    }
+    try:
+        command_loop.send_to_commander(BRIDGE_URL, summary)
+        print("CHATGPT_RETURN=SUBMITTED")
+    except Exception as exc:
+        print(f"CHATGPT_RETURN=BLOCKED: {exc}")
+
     print("CEZAR_COMMAND_CENTER=READY")
     print(f"CEZAR_URL={CEZAR_URL}")
     print(f"AUTOMATION_ID={automation_id}")
@@ -401,5 +416,16 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except BootstrapError as exc:
+        try:
+            command_loop.send_to_commander(
+                BRIDGE_URL,
+                {
+                    "status": "BLOCKED",
+                    "component": "cezar-command-center",
+                    "reason": str(exc),
+                },
+            )
+        except Exception:
+            pass
         print(f"CEZAR_COMMAND_CENTER=BLOCKED\n{exc}", file=sys.stderr)
         raise SystemExit(1)
