@@ -69,6 +69,20 @@ async function registerCurrentChat(sender, requestedUrl) {
       url,
     },
   });
+
+  const chatTabs = await chrome.tabs.query({
+    url: ["https://chatgpt.com/c/*"],
+  });
+  for (const chatTab of chatTabs) {
+    if (!Number.isInteger(chatTab.id)) {
+      continue;
+    }
+    chrome.tabs.sendMessage(chatTab.id, {
+      type: "cezar_commander_registered",
+      conversationUrl: url,
+    }).catch(() => {});
+  }
+
   return {
     registered: true,
     conversationUrl: url,
@@ -166,6 +180,8 @@ async function deliverCommander(message) {
   };
 }
 
+injectIntoOpenChatTabs().catch(() => {});
+
 chrome.runtime.onInstalled.addListener(() => {
   injectIntoOpenChatTabs().catch(() => {});
 });
@@ -175,6 +191,23 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "cezar_commander_status") {
+    storedCommander()
+      .then((existing) => {
+        sendResponse({
+          registered: Boolean(existing),
+          conversationUrl: existing?.url || "",
+        });
+      })
+      .catch(() => {
+        sendResponse({
+          registered: false,
+          conversationUrl: "",
+        });
+      });
+    return true;
+  }
+
   if (message?.type === "cezar_commander_register_this_tab") {
     registerCurrentChat(sender, message.conversationUrl)
       .then(sendResponse)
