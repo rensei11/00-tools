@@ -14,8 +14,9 @@ from urllib.parse import urlparse
 
 
 EXPECTED_EXTENSION_VERSION = "1.1.0"
+SETUP_NOTIFY_PORT = 4398
 MAX_PAYLOAD_BYTES = 262_144
-REGISTER_TIMEOUT_SECONDS = 30
+REGISTER_TIMEOUT_SECONDS = 8
 DELIVER_TIMEOUT_SECONDS = 45
 
 
@@ -206,6 +207,102 @@ def exchange(
         thread.join(timeout=2.0)
 
 
+def wait_for_human_registration(
+    *,
+    port: int = SETUP_NOTIFY_PORT,
+    timeout_seconds: int = 300,
+) -> dict[str, Any]:
+    result_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=1)
+
+    class RegistrationHandler(BaseHTTPRequestHandler):
+        server_version = "RenseiCezarCommanderSetup/1.0"
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+        def reply(self, status: int, body: str) -> None:
+            encoded = body.encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def do_POST(self) -> None:
+            if urlparse(self.path).path != "/register":
+                self.reply(404, "Not found")
+                return
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self.reply(400, "Invalid Content-Length")
+                return
+            if not 1 <= length <= MAX_PAYLOAD_BYTES:
+                self.reply(400, "Invalid payload size")
+                return
+            try:
+                payload = json.loads(
+                    self.rfile.read(length).decode("utf-8")
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                self.reply(400, "Invalid JSON")
+                return
+            if not isinstance(payload, dict):
+                self.reply(400, "Invalid payload")
+                return
+            try:
+                result_queue.put_nowait(payload)
+            except queue.Full:
+                self.reply(409, "Registration already received")
+                return
+            self.reply(200, "OK")
+
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", int(port)), RegistrationHandler)
+    except OSError as exc:
+        raise CommanderLinkError(
+            f"One-time commander setup port {port} is unavailable: {exc}"
+        ) from exc
+
+    server.daemon_threads = True
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        try:
+            result = result_queue.get(timeout=timeout_seconds)
+        except queue.Empty as exc:
+            raise CommanderLinkError(
+                "Timed out waiting for the one-time commander registration button."
+            ) from exc
+
+        version = str(result.get("extensionVersion") or "").strip()
+        if version != EXPECTED_EXTENSION_VERSION:
+            raise CommanderLinkError(
+                "Commander extension version mismatch during setup: "
+                f"{version or '(missing)'} != {EXPECTED_EXTENSION_VERSION}"
+            )
+        conversation_url = str(result.get("conversationUrl") or "").strip()
+        parsed = urlparse(conversation_url)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "chatgpt.com"
+            or not parsed.path.startswith("/c/")
+        ):
+            raise CommanderLinkError(
+                "One-time commander registration returned an invalid ChatGPT URL."
+            )
+        return {
+            "status": "REGISTERED",
+            "conversationUrl": conversation_url,
+            "extensionVersion": version,
+        }
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2.0)
+
+
 def register_commander() -> dict[str, Any]:
     result = exchange(
         "register",
@@ -236,13 +333,16 @@ def deliver_message(message: str) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", choices=["register", "deliver"])
+    parser.add_argument("mode", choices=["register", "deliver", "wait-register"])
     parser.add_argument("--message", default="")
+    parser.add_argument("--setup-port", type=int, default=SETUP_NOTIFY_PORT)
     args = parser.parse_args()
 
     try:
         if args.mode == "register":
             result = register_commander()
+        elif args.mode == "wait-register":
+            result = wait_for_human_registration(port=args.setup_port)
         else:
             result = deliver_message(args.message)
         print(json.dumps(result, ensure_ascii=False))
