@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import time
 import urllib.error
 import urllib.parse
@@ -10,8 +9,9 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+import commander_link
+
 DEFAULT_CEZAR_URL = "http://127.0.0.1:4321"
-DEFAULT_BRIDGE_URL = "http://127.0.0.1:8080"
 TERMINAL = {"done", "failed", "cancelled"}
 
 
@@ -271,93 +271,14 @@ def final_summary(
     }
 
 
-def load_env_file(path: Path) -> dict[str, str]:
-    if not path.is_file():
-        return {}
-    result: dict[str, str] = {}
-    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, value = line.split("=", 1)
-        result[key.strip()] = value.strip().strip('"').strip("'")
-    return result
+def register_commander() -> dict[str, Any]:
+    try:
+        return commander_link.register_commander()
+    except commander_link.CommanderLinkError as exc:
+        raise CommandLoopError(str(exc)) from exc
 
 
-def bridge_token() -> str:
-    return load_env_file(Path.home() / ".bridge-data" / ".env").get("API_TOKEN", "")
-
-
-def conversation_id(client: dict[str, Any]) -> str:
-    for key in ("sessionId", "conversationId"):
-        value = client.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    session = client.get("session")
-    if isinstance(session, dict):
-        for key in ("id", "sessionId", "conversationId"):
-            value = session.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    url = str(client.get("url") or "")
-    match = re.search(r"/c/([0-9a-fA-F-]{20,})", url)
-    return match.group(1) if match else ""
-
-
-def bridge_target(bridge_url: str) -> tuple[str, str]:
-    status = http_json("GET", f"{bridge_url}/setup/status")
-    if not isinstance(status, dict):
-        raise CommandLoopError("ChatGPT Bridge status response is invalid.")
-    if status.get("needsSelection"):
-        raise CommandLoopError(
-            "Multiple ChatGPT tabs are connected; commander tab is not selected."
-        )
-    active = status.get("activeClient")
-    if not isinstance(active, dict):
-        raise CommandLoopError("No ChatGPT commander tab is connected.")
-
-    client_id = str(active.get("id") or "").strip()
-    session_id = conversation_id(active)
-
-    if not session_id:
-        token = bridge_token()
-        sessions = http_json(
-            "GET",
-            f"{bridge_url}/sessions",
-            timeout=15.0,
-            token=token,
-        )
-        items = sessions.get("sessions") if isinstance(sessions, dict) else None
-        if (
-            isinstance(items, list)
-            and len(items) == 1
-            and isinstance(items[0], dict)
-        ):
-            session_id = str(
-                items[0].get("id")
-                or items[0].get("sessionId")
-                or ""
-            ).strip()
-
-    if not client_id:
-        raise CommandLoopError("Bridge active tab has no client id.")
-    if not session_id:
-        raise CommandLoopError(
-            "Could not identify the ChatGPT commander conversation."
-        )
-    return client_id, session_id
-
-
-def verify_commander_bridge(bridge_url: str) -> tuple[str, str]:
-    return bridge_target(bridge_url)
-
-
-def send_to_commander(
-    bridge_url: str,
-    summary: dict[str, Any],
-) -> None:
-    client_id, session_id = bridge_target(bridge_url)
-
+def send_to_commander(summary: dict[str, Any]) -> None:
     message = (
         "[CEZAR-COMMAND-RESULT]\n"
         + json.dumps(summary, ensure_ascii=False, indent=2)
@@ -369,30 +290,16 @@ def send_to_commander(
         "through AI-accessible paths. Do not ask the user to copy Codex output or choose an "
         "implementation route."
     )
-    result = http_json(
-        "POST",
-        f"{bridge_url}/browser/passive-prompt",
-        {
-            "requestId": f"cezar-command-{summary.get('run_id', 'unknown')}",
-            "message": message,
-            "sessionId": session_id,
-            "sourceClientId": client_id,
-            "timeoutMs": 60000,
-        },
-        timeout=70.0,
-        token=bridge_token(),
-    )
-    if not isinstance(result, dict) or result.get("submissionStatus") != "SUBMITTED":
-        raise CommandLoopError(
-            f"ChatGPT Bridge did not accept the result: {result}"
-        )
+    try:
+        commander_link.deliver_message(message)
+    except commander_link.CommanderLinkError as exc:
+        raise CommandLoopError(str(exc)) from exc
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo", required=True)
     parser.add_argument("--task-file", required=True)
     parser.add_argument("--cezar-url", default=DEFAULT_CEZAR_URL)
-    parser.add_argument("--bridge-url", default=DEFAULT_BRIDGE_URL)
     parser.add_argument("--timeout", type=int, default=3600)
     parser.add_argument("--result-file", default="cezar-command-result.json")
     parser.add_argument("--no-push", action="store_true")
@@ -431,7 +338,7 @@ def main() -> int:
 
     if not args.no_chatgpt_return:
         try:
-            send_to_commander(args.bridge_url.rstrip("/"), summary)
+            send_to_commander(summary)
             print("chatgpt_return=SUBMITTED", flush=True)
         except CommandLoopError as exc:
             print(f"chatgpt_return=BLOCKED: {exc}", flush=True)
