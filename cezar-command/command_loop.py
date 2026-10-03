@@ -260,6 +260,12 @@ def final_summary(
         "cezar_status": status,
         "run_id": run_id,
         "project_id": project_id,
+        "branch": run.get("branch"),
+        "base_branch": run.get("baseBranch"),
+        "pull_request_url": (
+            run.get("pullRequestUrl")
+            or run.get("referencedPullRequestUrl")
+        ),
         "steps": steps,
         "error": run.get("error"),
     }
