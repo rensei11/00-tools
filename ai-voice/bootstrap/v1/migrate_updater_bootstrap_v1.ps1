@@ -378,6 +378,71 @@ function Test-AppReady {
 
 function Stop-App {
     & wsl.exe -d Ubuntu -- bash -lc "pkill -f '/home/rensei/Irodori-TTS/.venv/bin/python [a]pp.py' || true" | Out-Null  # storage-policy: external-read
+
+    for ($attempt = 0; $attempt -lt 20; $attempt++) {
+        if (-not (Test-AppReady)) {
+            return
+        }
+        Start-Sleep -Milliseconds 250
+    }
+
+    throw 'Local app did not stop before update.'
+}
+
+function Test-StartupLogHandleReleased {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $true
+    }
+
+    $stream = $null
+    try {
+        $stream = [System.IO.File]::Open(
+            $Path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::ReadWrite,
+            [System.IO.FileShare]::None
+        )
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($null -ne $stream) {
+            $stream.Dispose()
+        }
+    }
+}
+
+function Wait-StartupLogHandlesReleased {
+    $startupLogs = @(
+        (Join-Path $toolDir '_last_startup.log'),
+        (Join-Path $toolDir '_last_startup_stdout.log')
+    )
+
+    for ($attempt = 0; $attempt -le 240; $attempt++) {
+        $released = $true
+        foreach ($path in $startupLogs) {
+            if (-not (Test-StartupLogHandleReleased $path)) {
+                $released = $false
+                break
+            }
+        }
+
+        if ($released) {
+            if ($attempt -gt 0) {
+                Write-Log ('STARTUP_LOG_HANDLES_RELEASED after_ms=' + ($attempt * 250))
+            }
+            return $true
+        }
+
+        if ($attempt -lt 240) {
+            Start-Sleep -Milliseconds 250
+        }
+    }
+
+    Write-Log 'STARTUP_LOG_HANDLES_TIMEOUT after_ms=60000'
+    return $false
 }
 
 function Start-CurrentApp {
@@ -385,6 +450,12 @@ function Start-CurrentApp {
 
     if ($NoLaunch) {
         return
+    }
+
+    if (-not (Test-AppReady)) {
+        if (-not (Wait-StartupLogHandlesReleased)) {
+            throw 'Previous startup log handles did not close before restart.'
+        }
     }
 
     $launcher = Join-Path $toolDir 'start_local.ps1'
@@ -404,9 +475,17 @@ function Start-CurrentApp {
         $arguments += '-NoBrowser'
     }
 
-    & powershell.exe @arguments
-    if ($LASTEXITCODE -ne 0) {
-        throw ('Local launcher failed with exit code ' + $LASTEXITCODE)
+    $launcherOutput = @(& powershell.exe @arguments 2>&1)
+    $launcherExit = $LASTEXITCODE
+    foreach ($line in $launcherOutput) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
+            Write-Log ('LAUNCHER_OUTPUT ' + [string]$line)
+        }
+    }
+    Write-Log ('LAUNCHER_EXIT=' + $launcherExit)
+
+    if ($launcherExit -ne 0) {
+        throw ('Local launcher failed with exit code ' + $launcherExit)
     }
 }
 
