@@ -138,6 +138,9 @@ def ensure_target_repo(task: dict[str, Any]) -> tuple[Path, str]:
             f"Target repository has local changes; refusing to overwrite them: {repo}"
         )
 
+    git(repo, "config", "user.name", "Cezar Command Center")
+    git(repo, "config", "user.email", "cezar-command@users.noreply.github.com")
+
     git(repo, "fetch", "origin", branch)
     current = git(repo, "branch", "--show-current").stdout.strip()
     remote_ref = f"origin/{branch}"
