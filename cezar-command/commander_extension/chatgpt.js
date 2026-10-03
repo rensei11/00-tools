@@ -212,6 +212,28 @@
 
   installRegistrationButton().catch(() => {});
 
+  function waitForSubmissionAccepted(composer, timeoutMs = 10000) {
+    return new Promise((resolve, reject) => {
+      const deadline = Date.now() + timeoutMs;
+      const inspect = () => {
+        if (!composer.isConnected) {
+          resolve();
+          return;
+        }
+        if (!composerText(composer)) {
+          resolve();
+          return;
+        }
+        if (Date.now() >= deadline) {
+          reject(new Error("ChatGPT did not confirm prompt submission."));
+          return;
+        }
+        setTimeout(inspect, 120);
+      };
+      inspect();
+    });
+  }
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === "cezar_commander_registered") {
       document.getElementById("rensei-cezar-commander-register")?.remove();
@@ -239,6 +261,7 @@
         setComposerText(composer, prompt);
         const button = await waitForSendButton(composer);
         button.click();
+        await waitForSubmissionAccepted(composer);
         sendResponse({
           submitted: true,
           conversationUrl: location.href,
