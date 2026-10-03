@@ -37,6 +37,31 @@ jobs:
             cezar-command/test_command_loop.py
       - name: Run command loop tests
         run: python -m unittest cezar-command/test_command_loop.py
+      - name: Prove managed Node bootstrap from an empty folder
+        run: |
+          python - <<'PY'
+          import sys
+          import tempfile
+          from pathlib import Path
+
+          sys.path.insert(0, str(Path("cezar-command").resolve()))
+          import bootstrap_local as bootstrap
+
+          with tempfile.TemporaryDirectory(prefix="managed-node-proof-") as raw:
+              root = Path(raw)
+              node_root = bootstrap.ensure_managed_node(root)
+              bootstrap.apply_managed_node(node_root)
+              node = node_root / "bin" / "node"
+              npm = node_root / "bin" / "npm"
+              node_version = bootstrap.run([str(node), "--version"]).stdout.strip()
+              npm_version = bootstrap.run([str(npm), "--version"]).stdout.strip()
+              if not node_version.startswith("v22.23.2"):
+                  raise SystemExit(f"unexpected managed Node version: {node_version}")
+              if not npm_version:
+                  raise SystemExit("managed npm returned no version")
+              print(f"managed Node: {node_version}")
+              print(f"managed npm: {npm_version}")
+          PY
       - name: Install exact Cezar runtime
         run: npm install --prefix .cezar-smoke --no-audit --no-fund @open-mercato/cezar@0.13.0
       - name: Run exact Cezar API smoke test
