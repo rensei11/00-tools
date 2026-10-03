@@ -23,6 +23,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
       - name: Compile controllers
         run: |
           python -m py_compile \
@@ -30,9 +33,14 @@ jobs:
             cezar-command/dispatch.py \
             cezar-command/bootstrap_local.py \
             cezar-command/watch_task.py \
+            cezar-command/cezar_smoke_test.py \
             cezar-command/test_command_loop.py
       - name: Run command loop tests
         run: python -m unittest cezar-command/test_command_loop.py
+      - name: Install exact Cezar runtime
+        run: npm install --prefix .cezar-smoke --no-audit --no-fund @open-mercato/cezar@0.13.0
+      - name: Run exact Cezar API smoke test
+        run: python cezar-command/cezar_smoke_test.py --cezar-bin .cezar-smoke/node_modules/.bin/cezar
       - name: Verify bootstrap has no GitHub CLI dependency
         run: |
           python - <<'PY'
