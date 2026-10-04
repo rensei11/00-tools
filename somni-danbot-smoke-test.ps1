@@ -8,6 +8,14 @@ function Wait-BeforeClose {
     }
 }
 
+function Test-Python {
+    param([string]$Path)
+    if (-not $Path) { return $false }
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    & $Path -c "import sys; print(sys.version_info[:2])" *> $null
+    return ($LASTEXITCODE -eq 0)
+}
+
 $Root = $null
 $Log = $null
 
@@ -28,58 +36,57 @@ try {
     "Somni: $($Somni.FullName)" | Add-Content -Path $Log -Encoding UTF8
     "Test root: $Root" | Add-Content -Path $Log -Encoding UTF8
 
-    $CandidatePaths = @(
-        (Join-Path $Somni.FullName ".venv\Scripts\python.exe"),
-        (Join-Path $Somni.FullName "venv\Scripts\python.exe"),
-        (Join-Path $Somni.FullName "python_embeded\python.exe")
-    )
-
-    $Comfy = Join-Path $Somni.Parent.FullName "ComfyUI-Anima"
-    if (Test-Path -LiteralPath $Comfy) {
-        $CandidatePaths += (Join-Path $Comfy ".venv\Scripts\python.exe")
-        $CandidatePaths += (Join-Path $Comfy "venv\Scripts\python.exe")
-        $CandidatePaths += (Join-Path $Comfy "python_embeded\python.exe")
-    }
-
     $Python = $null
-    foreach ($Candidate in $CandidatePaths | Select-Object -Unique) {
-        if (-not (Test-Path -LiteralPath $Candidate -PathType Leaf)) {
-            continue
-        }
-        & $Candidate -c "import torch" *> $null
-        if ($LASTEXITCODE -eq 0) {
-            $Python = $Candidate
-            break
+
+    $PyLauncher = Get-Command "py.exe" -ErrorAction SilentlyContinue
+    if ($PyLauncher) {
+        foreach ($Version in @("3.13", "3.12", "3.11", "3.10", "3")) {
+            $Resolved = & $PyLauncher.Source "-$Version" -c "import sys; print(sys.executable)" 2>$null
+            if ($LASTEXITCODE -eq 0 -and $Resolved) {
+                $Resolved = ($Resolved | Select-Object -First 1).Trim()
+                if (Test-Python $Resolved) {
+                    $Python = $Resolved
+                    break
+                }
+            }
         }
     }
 
     if (-not $Python) {
-        $SearchRoots = @($Somni.FullName)
-        if (Test-Path -LiteralPath $Comfy) {
-            $SearchRoots += $Comfy
-        }
-
-        foreach ($SearchRoot in $SearchRoots) {
-            $Found = Get-ChildItem -LiteralPath $SearchRoot -Recurse -File -Filter "python.exe" -ErrorAction SilentlyContinue
-            foreach ($Item in $Found) {
-                & $Item.FullName -c "import torch" *> $null
-                if ($LASTEXITCODE -eq 0) {
-                    $Python = $Item.FullName
-                    break
-                }
-            }
-            if ($Python) {
+        foreach ($Name in @("python.exe", "python3.exe")) {
+            $Cmd = Get-Command $Name -ErrorAction SilentlyContinue
+            if ($Cmd -and (Test-Python $Cmd.Source)) {
+                $Python = $Cmd.Source
                 break
             }
         }
     }
 
     if (-not $Python) {
-        throw "No existing Python with torch was found in Somni or ComfyUI-Anima."
+        $CandidateRoots = @(
+            "$env:LOCALAPPDATA\Programs\Python",
+            "$env:ProgramFiles\Python",
+            "$env:ProgramFiles\Python3"
+        )
+        foreach ($CandidateRoot in $CandidateRoots) {
+            if (-not (Test-Path -LiteralPath $CandidateRoot)) { continue }
+            $Found = Get-ChildItem -LiteralPath $CandidateRoot -Recurse -File -Filter "python.exe" -ErrorAction SilentlyContinue
+            foreach ($Item in $Found) {
+                if (Test-Python $Item.FullName) {
+                    $Python = $Item.FullName
+                    break
+                }
+            }
+            if ($Python) { break }
+        }
+    }
+
+    if (-not $Python) {
+        throw "No usable Windows Python was found."
     }
 
     "Python: $Python" | Add-Content -Path $Log -Encoding UTF8
-    Write-Host "Using an existing Python only as an interpreter:"
+    Write-Host "Using Windows Python only as an interpreter:"
     Write-Host $Python
 
     $PackageDir = Join-Path $Root "packages"
@@ -92,8 +99,14 @@ try {
     Write-Host "Downloading the isolated test script..."
     Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/rensei11/00-tools/main/somni-danbot-smoke-test.py" -OutFile $PythonScript
 
-    Write-Host "Installing isolated test dependencies..."
-    Write-Host "This installs only under the DanbotNL-test folder."
+    Write-Host "Installing CPU Torch into the isolated test folder..."
+    & $Python -m pip install --disable-pip-version-check --upgrade --target $PackageDir --index-url "https://download.pytorch.org/whl/cpu" "torch" 2>&1 |
+        Out-File -FilePath $Log -Append -Encoding utf8
+    if ($LASTEXITCODE -ne 0) {
+        throw "CPU Torch installation failed. See run.log."
+    }
+
+    Write-Host "Installing the remaining isolated test dependencies..."
     & $Python -m pip install --disable-pip-version-check --upgrade --target $PackageDir "transformers==4.49.0" "sentencepiece" "protobuf" 2>&1 |
         Out-File -FilePath $Log -Append -Encoding utf8
     if ($LASTEXITCODE -ne 0) {
@@ -139,7 +152,7 @@ catch {
             Write-Host "Log:"
             Write-Host $Log
             Write-Host ""
-            Get-Content -LiteralPath $Log -Tail 40 -ErrorAction SilentlyContinue
+            Get-Content -LiteralPath $Log -Tail 50 -ErrorAction SilentlyContinue
         } catch {
         }
     }
