@@ -99,29 +99,47 @@ try {
     Write-Host "Downloading the isolated test script..."
     Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/rensei11/00-tools/main/somni-danbot-smoke-test.py" -OutFile $PythonScript
 
-    Write-Host "Installing CPU Torch into the isolated test folder..."
-    & $Python -m pip install --disable-pip-version-check --upgrade --target $PackageDir --index-url "https://download.pytorch.org/whl/cpu" "torch" 2>&1 |
-        Out-File -FilePath $Log -Append -Encoding utf8
-    if ($LASTEXITCODE -ne 0) {
-        throw "CPU Torch installation failed. See run.log."
+    $TorchReady = Test-Path -LiteralPath (Join-Path $PackageDir "torch")
+    $TransformersReady = Test-Path -LiteralPath (Join-Path $PackageDir "transformers")
+
+    if (-not $TorchReady) {
+        Write-Host "Installing CPU Torch into the isolated test folder..."
+        & $Python -m pip install --disable-pip-version-check --upgrade --target $PackageDir --index-url "https://download.pytorch.org/whl/cpu" "torch" 2>&1 |
+            Out-File -FilePath $Log -Append -Encoding utf8
+        if ($LASTEXITCODE -ne 0) {
+            throw "CPU Torch installation failed. See run.log."
+        }
+    } else {
+        Write-Host "CPU Torch is already installed. Skipping."
     }
 
-    Write-Host "Installing the remaining isolated test dependencies..."
-    & $Python -m pip install --disable-pip-version-check --upgrade --target $PackageDir "transformers==4.49.0" "sentencepiece" "protobuf" 2>&1 |
-        Out-File -FilePath $Log -Append -Encoding utf8
-    if ($LASTEXITCODE -ne 0) {
-        throw "Dependency installation failed. See run.log."
+    if (-not $TransformersReady) {
+        Write-Host "Installing the remaining isolated test dependencies..."
+        & $Python -m pip install --disable-pip-version-check --upgrade --target $PackageDir "transformers==4.49.0" "sentencepiece" "protobuf" 2>&1 |
+            Out-File -FilePath $Log -Append -Encoding utf8
+        if ($LASTEXITCODE -ne 0) {
+            throw "Dependency installation failed. See run.log."
+        }
+    } else {
+        Write-Host "Remaining dependencies are already installed. Skipping."
     }
 
     $env:PYTHONPATH = $PackageDir
     $env:HF_HOME = $CacheDir
     $env:HF_HUB_DISABLE_TELEMETRY = "1"
+    $env:HF_HUB_DISABLE_SYMLINKS_WARNING = "1"
 
     Write-Host "Running one Japanese-to-Danbooru-tag conversion..."
     Write-Host "The original prompt will be read from the saved somni_00040 evidence."
+
+    $PreviousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     & $Python $PythonScript $Somni.FullName $Root 2>&1 |
         Out-File -FilePath $Log -Append -Encoding utf8
-    if ($LASTEXITCODE -ne 0) {
+    $PythonExitCode = $LASTEXITCODE
+    $ErrorActionPreference = $PreviousErrorAction
+
+    if ($PythonExitCode -ne 0) {
         throw "DanbotNL conversion failed. See run.log."
     }
 
