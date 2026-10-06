@@ -194,7 +194,8 @@ jobs:
           $franzText = [IO.File]::ReadAllText($franzPs1, [Text.Encoding]::UTF8)
           foreach ($required in @(
               'Phase2 Franz legacy migration: START',
-              'PHASE2_LEGACY_PILOT_CHARACTER = ''フランツ''',
+              '06b40de143f1f7d34d5157454651f02712b20d82',
+              'wavCount -ne 20 -or $flacCount -ne 0',
               'def migrate_legacy_existing_wavs',
               'Migration committed:',
               'PHASE2_FRANZ=MIGRATED_VERIFICATION_FAILED',
