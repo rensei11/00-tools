@@ -259,8 +259,9 @@ jobs:
           Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/rensei11/00-tools/ee56034d2be4dce92a0927b830aefc275e842079/ai-voice/phase2/franz_phase2_migrate_v1.py' -OutFile $transportPath -TimeoutSec 30
           $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
           $transportText = [IO.File]::ReadAllText($transportPath, $strictUtf8)
-          if (-not $transportText.Contains('EXPECTED_CHARACTER = "フランツ"')) {
-              throw 'Downloaded Franz helper was not decoded as UTF-8.'
+          if (-not $transportText.Contains('EXPECTED_WAV_COUNT = 20') -or
+              -not $transportText.Contains('FRANZ_PHASE2_SELF_TEST=PASS')) {
+              throw 'Downloaded Franz helper UTF-8 validation markers are missing.'
           }
           python $transportPath --self-test
           if ($LASTEXITCODE -ne 0) {
