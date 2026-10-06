@@ -630,7 +630,7 @@ def _build_fixture(root: Path, tool_root: Path) -> tuple[Path, list[Path]]:
     emotion_counts = {"cheerful": 5, "cheerful_30秒": 5, "gentle": 9}
     for emotion, count in emotion_counts.items():
         (emotion_dir / f"{emotion}.pt").write_bytes(
-            ("protected-" + emotion).encode("ascii")
+            ("protected-" + emotion).encode("utf-8")
         )
         write_json(
             emotion_dir / f"{emotion}.json",
