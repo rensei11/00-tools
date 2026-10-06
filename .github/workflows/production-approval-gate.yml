@@ -84,6 +84,46 @@ jobs:
               }
           }
 
+          $inventoryCmd = 'ai-voice/phase2/02_phase2_inventory.cmd'
+          $inventoryPs1 = 'ai-voice/phase2/phase2_readonly_inventory_v1.ps1'
+
+          $inventoryCmdBytes = [IO.File]::ReadAllBytes($inventoryCmd)
+          if (@($inventoryCmdBytes | Where-Object { $_ -gt 127 }).Count -ne 0) {
+              throw 'Phase2 inventory CMD must remain ASCII-only.'
+          }
+
+          $inventoryPs1Bytes = [IO.File]::ReadAllBytes($inventoryPs1)
+          if ($inventoryPs1Bytes.Length -lt 3 -or
+              $inventoryPs1Bytes[0] -ne 0xEF -or
+              $inventoryPs1Bytes[1] -ne 0xBB -or
+              $inventoryPs1Bytes[2] -ne 0xBF) {
+              throw 'Phase2 inventory PS1 with non-ASCII text must remain UTF-8 BOM.'
+          }
+
+          $inventoryTokens = $null
+          $inventoryErrors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $inventoryPs1),
+              [ref]$inventoryTokens,
+              [ref]$inventoryErrors
+          )
+          if (@($inventoryErrors).Count -ne 0) {
+              throw ('Phase2 inventory PowerShell parse failed: ' + $inventoryErrors[0].Message)
+          }
+
+          $inventoryText = [IO.File]::ReadAllText($inventoryPs1, [Text.Encoding]::UTF8)
+          foreach ($required in @(
+              'PHASE2_INVENTORY=START',
+              'CLEAN_PILOT_CANDIDATE',
+              'LEGACY_MIGRATION_CANDIDATE',
+              'READ_ONLY_CONFIRMATION=No files were created, modified, moved, or deleted under the reference-audio root.',
+              'PHASE2_INVENTORY=SUCCESS'
+          )) {
+              if (-not $inventoryText.Contains($required)) {
+                  throw ('Phase2 inventory guard is missing: ' + $required)
+              }
+          }
+
           $updater = [IO.File]::ReadAllText($updaterPath, [Text.Encoding]::UTF8)
           foreach ($required in @(
               '[switch]$RepairButton',
