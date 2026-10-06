@@ -191,6 +191,33 @@ jobs:
               throw ('Franz Phase2 PowerShell parse failed: ' + $franzErrors[0].Message)
           }
 
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $franzZip = 'ai-voice/phase2/Phase2_Franz_FLAC.zip'
+          $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $franzZip))
+          try {
+              $entries = @($zip.Entries)
+              if ($entries.Count -ne 1 -or $entries[0].FullName -ne '04_franz_phase2_flac.cmd') {
+                  throw 'Franz Phase2 ZIP contents are invalid.'
+              }
+              $stream = $entries[0].Open()
+              $reader = $null
+              try {
+                  $reader = New-Object IO.StreamReader($stream, [Text.Encoding]::ASCII, $true)
+                  $zipCmdText = $reader.ReadToEnd()
+              }
+              finally {
+                  if ($reader) { $reader.Dispose() } else { $stream.Dispose() }
+              }
+              $diskCmdText = [IO.File]::ReadAllText($franzCmd, [Text.Encoding]::ASCII)
+              $zipNorm = $zipCmdText.Replace(([char]13 + [char]10), [char]10)
+              $diskNorm = $diskCmdText.Replace(([char]13 + [char]10), [char]10)
+              if ($zipNorm -ne $diskNorm) {
+                  throw 'Franz Phase2 ZIP CMD does not match the public CMD.'
+              }
+          }
+          finally {
+              $zip.Dispose()
+          }
           $franzText = [IO.File]::ReadAllText($franzPs1, [Text.Encoding]::UTF8)
           foreach ($required in @(
               'Phase2 Franz legacy migration: START',
