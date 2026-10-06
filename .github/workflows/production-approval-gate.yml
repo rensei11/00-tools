@@ -209,10 +209,15 @@ jobs:
                   if ($reader) { $reader.Dispose() } else { $stream.Dispose() }
               }
               $diskCmdText = [IO.File]::ReadAllText($franzCmd, [Text.Encoding]::ASCII)
-              $zipNorm = $zipCmdText.Replace(([char]13 + [char]10), [char]10)
-              $diskNorm = $diskCmdText.Replace(([char]13 + [char]10), [char]10)
-              if ($zipNorm -ne $diskNorm) {
-                  throw 'Franz Phase2 ZIP CMD does not match the public CMD.'
+              $zipLines = @($zipCmdText -split '\r?\n')
+              $diskLines = @($diskCmdText -split '\r?\n')
+              if ($zipLines.Count -ne $diskLines.Count) {
+                  throw 'Franz Phase2 ZIP CMD line count does not match the public CMD.'
+              }
+              for ($index = 0; $index -lt $zipLines.Count; $index++) {
+                  if ($zipLines[$index] -cne $diskLines[$index]) {
+                      throw ('Franz Phase2 ZIP CMD differs from the public CMD at line ' + ($index + 1))
+                  }
               }
           }
           finally {
