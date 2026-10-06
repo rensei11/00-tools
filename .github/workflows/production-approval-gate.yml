@@ -545,6 +545,146 @@ jobs:
               throw 'Paimon Phase2 packaged CMD self-test did not report PASS.'
           }
 
+          $requiemCmd = 'ai-voice/phase2/07_requiem_phase2_flac.cmd'
+          $requiemPs1 = 'ai-voice/phase2/requiem_phase2_flac_v1.ps1'
+          $requiemHelper = 'ai-voice/phase2/requiem_phase2_migrate_v1.py'
+          $requiemZip = 'ai-voice/phase2/Phase2_Requiem_FLAC.zip'
+
+          $requiemCmdBytes = [IO.File]::ReadAllBytes($requiemCmd)
+          if (@($requiemCmdBytes | Where-Object { $_ -gt 127 }).Count -ne 0) {
+              throw 'Requiem Phase2 CMD must remain ASCII-only.'
+          }
+
+          $requiemPs1Bytes = [IO.File]::ReadAllBytes($requiemPs1)
+          if ($requiemPs1Bytes.Length -lt 3 -or
+              $requiemPs1Bytes[0] -ne 0xEF -or
+              $requiemPs1Bytes[1] -ne 0xBB -or
+              $requiemPs1Bytes[2] -ne 0xBF) {
+              throw 'Requiem Phase2 PS1 with non-ASCII text must remain UTF-8 BOM.'
+          }
+
+          $requiemTokens = $null
+          $requiemErrors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $requiemPs1),
+              [ref]$requiemTokens,
+              [ref]$requiemErrors
+          )
+          if (@($requiemErrors).Count -ne 0) {
+              throw ('Requiem Phase2 PowerShell parse failed: ' + $requiemErrors[0].Message)
+          }
+
+          python -m py_compile $requiemHelper
+          if ($LASTEXITCODE -ne 0) {
+              throw ('Requiem Phase2 helper compile failed with exit code ' + $LASTEXITCODE)
+          }
+          $requiemHelperTest = @(& python $requiemHelper --self-test 2>&1)
+          if ($LASTEXITCODE -ne 0 -or (@($requiemHelperTest | ForEach-Object { [string]$_ }) -notcontains 'REQUIEM_PHASE2_SELF_TEST=PASS')) {
+              throw ('Requiem Phase2 helper self-test failed: ' + ((@($requiemHelperTest | ForEach-Object { [string]$_ })) -join ' / '))
+          }
+
+          $requiemDiagRoot = Join-Path $env:RUNNER_TEMP 'requiem-missing-root'
+          Remove-Item -LiteralPath $requiemDiagRoot -Recurse -Force -ErrorAction SilentlyContinue
+          $requiemDiag = @(& python $requiemHelper --preflight-only --root $requiemDiagRoot --tool-root $requiemDiagRoot 2>&1)
+          $requiemDiagExit = $LASTEXITCODE
+          $requiemDiagText = (@($requiemDiag | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+          if ($requiemDiagExit -eq 0) {
+              throw 'Requiem preflight diagnostic unexpectedly succeeded for a missing root.'
+          }
+          if (-not $requiemDiagText.Contains('REQUIEM_PREFLIGHT={"status":"STOPPED"')) {
+              throw ('Requiem preflight diagnostic did not return structured STOPPED output: ' + $requiemDiagText)
+          }
+          if ($requiemDiagText.Contains('Traceback (most recent call last):')) {
+              throw 'Requiem preflight diagnostic leaked a Python traceback.'
+          }
+
+          $requiemText = [IO.File]::ReadAllText($requiemPs1, [Text.Encoding]::UTF8)
+          foreach ($required in @(
+              'param([switch]$PackageSelfTest)',
+              '$PSScriptRoot',
+              'requiem_phase2_migrate_v1.py',
+              'wavCount -ne 137 -or $flacCount -ne 0',
+              'wslpath -a -u $helperWin',
+              'Migration committed:',
+              'PHASE2_REQUIEM=MIGRATED_VERIFICATION_FAILED',
+              'PHASE2_REQUIEM=SUCCESS'
+          )) {
+              if (-not $requiemText.Contains($required)) {
+                  throw ('Requiem Phase2 guard is missing: ' + $required)
+              }
+          }
+          if ($requiemText.Contains('Invoke-WebRequest') -or
+              $requiemText.Contains('raw.githubusercontent.com') -or
+              $requiemText.Contains('StandardInput')) {
+              throw 'Requiem Phase2 PS1 must not use runtime download or stdin helper transport.'
+          }
+
+          $requiemHelperText = [IO.File]::ReadAllText($requiemHelper, [Text.Encoding]::UTF8)
+          foreach ($required in @(
+              'EXPECTED_WAV_COUNT = 137',
+              'EXPECTED_STANDARD_REF_COUNT = 16',
+              'EXPECTED_EMOTION_CACHE_COUNT = 18',
+              'EXPECTED_TOOL_PLAN_DISTINCT_WAVS = 16',
+              '"cheerful.json": 5',
+              '"cheerful_30秒.json": 5',
+              '"gentle.json": 9',
+              '音声一覧.before_nte_dialogue_20260928.json',
+              'shared_results',
+              'emotion_pools',
+              'REQUIEM_PREFLIGHT=',
+              'REQUIEM_MIGRATION_ERROR=',
+              'REQUIEM_PHASE2_SELF_TEST=PASS'
+          )) {
+              if (-not $requiemHelperText.Contains($required)) {
+                  throw ('Requiem Phase2 helper guard is missing: ' + $required)
+              }
+          }
+
+          $requiemZipHandle = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $requiemZip))
+          try {
+              $entryNames = @($requiemZipHandle.Entries | ForEach-Object { $_.FullName } | Sort-Object)
+              $expectedNames = @(
+                  '07_requiem_phase2_flac.cmd',
+                  'requiem_phase2_flac_v1.ps1',
+                  'requiem_phase2_migrate_v1.py'
+              ) | Sort-Object
+              if ($entryNames.Count -ne $expectedNames.Count) {
+                  throw 'Requiem Phase2 ZIP entry count is invalid.'
+              }
+              for ($index = 0; $index -lt $expectedNames.Count; $index++) {
+                  if ($entryNames[$index] -cne $expectedNames[$index]) {
+                      throw ('Requiem Phase2 ZIP entry mismatch: ' + $entryNames[$index])
+                  }
+              }
+          }
+          finally {
+              $requiemZipHandle.Dispose()
+          }
+
+          $requiemExtractRoot = Join-Path $env:RUNNER_TEMP 'requiem-phase2-package'
+          Remove-Item -LiteralPath $requiemExtractRoot -Recurse -Force -ErrorAction SilentlyContinue
+          [IO.Compression.ZipFile]::ExtractToDirectory((Resolve-Path $requiemZip), $requiemExtractRoot)
+
+          $env:REQUIEM_PHASE2_PACKAGE_SELF_TEST = '1'
+          try {
+              & (Join-Path $requiemExtractRoot '07_requiem_phase2_flac.cmd')
+              if ($LASTEXITCODE -ne 0) {
+                  throw ('Requiem Phase2 packaged CMD self-test failed with exit code ' + $LASTEXITCODE)
+              }
+          }
+          finally {
+              Remove-Item Env:REQUIEM_PHASE2_PACKAGE_SELF_TEST -ErrorAction SilentlyContinue
+          }
+
+          $requiemPackageLog = Join-Path $env:TEMP 'rensei_requiem_phase2_flac_log.txt'
+          if (-not (Test-Path -LiteralPath $requiemPackageLog -PathType Leaf)) {
+              throw 'Requiem Phase2 packaged CMD self-test did not create its log.'
+          }
+          $requiemPackageLogText = [IO.File]::ReadAllText($requiemPackageLog, [Text.Encoding]::UTF8)
+          if (-not $requiemPackageLogText.Contains('REQUIEM_PHASE2_PACKAGE_SELF_TEST=PASS')) {
+              throw 'Requiem Phase2 packaged CMD self-test did not report PASS.'
+          }
+
           $updater = [IO.File]::ReadAllText($updaterPath, [Text.Encoding]::UTF8)
           foreach ($required in @(
               '[switch]$RepairButton',
