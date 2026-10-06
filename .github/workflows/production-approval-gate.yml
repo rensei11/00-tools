@@ -440,6 +440,21 @@ jobs:
               throw ('Paimon Phase2 helper self-test failed: ' + ((@($paimonHelperTest | ForEach-Object { [string]$_ })) -join ' / '))
           }
 
+          $paimonDiagRoot = Join-Path $env:RUNNER_TEMP 'paimon-missing-root'
+          Remove-Item -LiteralPath $paimonDiagRoot -Recurse -Force -ErrorAction SilentlyContinue
+          $paimonDiag = @(& python $paimonHelper --preflight-only --root $paimonDiagRoot --tool-root $paimonDiagRoot 2>&1)
+          $paimonDiagExit = $LASTEXITCODE
+          $paimonDiagText = (@($paimonDiag | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+          if ($paimonDiagExit -eq 0) {
+              throw 'Paimon preflight diagnostic unexpectedly succeeded for a missing root.'
+          }
+          if (-not $paimonDiagText.Contains('PAIMON_PREFLIGHT={"status":"STOPPED"')) {
+              throw ('Paimon preflight diagnostic did not return structured STOPPED output: ' + $paimonDiagText)
+          }
+          if ($paimonDiagText.Contains('Traceback (most recent call last):')) {
+              throw 'Paimon preflight diagnostic leaked a Python traceback.'
+          }
+
           $paimonText = [IO.File]::ReadAllText($paimonPs1, [Text.Encoding]::UTF8)
           foreach ($required in @(
               'param([switch]$PackageSelfTest)',

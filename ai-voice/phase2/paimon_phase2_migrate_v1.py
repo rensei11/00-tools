@@ -795,6 +795,7 @@ def self_test() -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--preflight-only", action="store_true")
     parser.add_argument(
         "--root",
         default="/mnt/d/AI生成ファイル/Irodori-TTS/参照音声",
@@ -809,10 +810,63 @@ def main() -> int:
         self_test()
         return 0
 
-    result = migrate(
-        Path(args.root),
-        Path(args.tool_root),
-    )
+    root = Path(args.root)
+    tool_root = Path(args.tool_root)
+
+    if args.preflight_only:
+        try:
+            state = _preflight(root, tool_root, EXPECTED_CHARACTER)
+            print(
+                "PAIMON_PREFLIGHT="
+                + json.dumps(
+                    {
+                        "status": "PASS",
+                        "wav_count": len(state["wavs"]),
+                        "protected_pt_count": len(state["protected_hashes"]),
+                        "character_json_count": (
+                            2
+                            + len(state["manifest_data"])
+                            + len(state["emotion_data"])
+                            + len(state["comparison_data"])
+                        ),
+                        "tool_plan": str(state["tool_plan_path"]),
+                    },
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                )
+            )
+            return 0
+        except Exception as exc:
+            print(
+                "PAIMON_PREFLIGHT="
+                + json.dumps(
+                    {
+                        "status": "STOPPED",
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                )
+            )
+            return 3
+
+    try:
+        result = migrate(root, tool_root)
+    except Exception as exc:
+        print(
+            "PAIMON_MIGRATION_ERROR="
+            + json.dumps(
+                {
+                    "type": type(exc).__name__,
+                    "message": str(exc),
+                },
+                ensure_ascii=True,
+                separators=(",", ":"),
+            )
+        )
+        return 1
+
     print(
         "PHASE2_RESULT="
         + json.dumps(
