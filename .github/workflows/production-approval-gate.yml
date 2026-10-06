@@ -436,6 +436,10 @@ jobs:
               throw ('Paimon Phase2 helper compile failed with exit code ' + $LASTEXITCODE)
           }
           $paimonHelperTest = @(& python $paimonHelper --self-test 2>&1)
+          if ($LASTEXITCODE -ne 0 -or (@($paimonHelperTest | ForEach-Object { [string]$_ }) -notcontains 'PAIMON_PHASE2_SELF_TEST=PASS')) {
+              throw ('Paimon Phase2 helper self-test failed: ' + ((@($paimonHelperTest | ForEach-Object { [string]$_ })) -join ' / '))
+          }
+
           $paimonDiagRoot = Join-Path $env:RUNNER_TEMP 'paimon-missing-root'
           Remove-Item -LiteralPath $paimonDiagRoot -Recurse -Force -ErrorAction SilentlyContinue
           $paimonDiag = @(& python $paimonHelper --preflight-only --root $paimonDiagRoot --tool-root $paimonDiagRoot 2>&1)
@@ -449,10 +453,6 @@ jobs:
           }
           if ($paimonDiagText.Contains('Traceback (most recent call last):')) {
               throw 'Paimon preflight diagnostic leaked a Python traceback.'
-          }
-
-          if ($LASTEXITCODE -ne 0 -or (@($paimonHelperTest | ForEach-Object { [string]$_ }) -notcontains 'PAIMON_PHASE2_SELF_TEST=PASS')) {
-              throw ('Paimon Phase2 helper self-test failed: ' + ((@($paimonHelperTest | ForEach-Object { [string]$_ })) -join ' / '))
           }
 
           $paimonText = [IO.File]::ReadAllText($paimonPs1, [Text.Encoding]::UTF8)
