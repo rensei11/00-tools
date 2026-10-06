@@ -2,7 +2,8 @@
 $ProgressPreference = 'SilentlyContinue'
 
 $logPath = Join-Path $env:TEMP 'rensei_franz_phase2_flac_log.txt'
-$helperUrl = 'https://raw.githubusercontent.com/rensei11/00-tools/main/ai-voice/phase2/franz_phase2_migrate_v1.py'
+$helperUrl = 'https://raw.githubusercontent.com/rensei11/00-tools/ee56034d2be4dce92a0927b830aefc275e842079/ai-voice/phase2/franz_phase2_migrate_v1.py'
+$helperWin = Join-Path $env:TEMP 'rensei_franz_phase2_migrate.py'
 $appBase = 'http://127.0.0.1:18762'
 $referenceRootWin = 'D:\AI生成ファイル\Irodori-TTS\参照音声'
 $character = 'フランツ'
@@ -86,7 +87,11 @@ try {
     Write-Phase2Log ('Preflight: audited Franz state confirmed / wav=' + $wavCount + ' / flac=' + $flacCount)
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $helperText = (Invoke-WebRequest -UseBasicParsing -Uri $helperUrl -TimeoutSec 30).Content
+    Remove-Item -LiteralPath $helperWin -Force -ErrorAction SilentlyContinue
+    Invoke-WebRequest -UseBasicParsing -Uri $helperUrl -OutFile $helperWin -TimeoutSec 30
+
+    $utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
+    $helperText = [IO.File]::ReadAllText($helperWin, $utf8Strict)
     foreach ($required in @(
         'EXPECTED_WAV_COUNT = 20',
         'def _preflight(',
@@ -99,35 +104,24 @@ try {
         }
     }
 
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $wsl
-    $psi.Arguments = ('-e ' + $pythonPath + ' -')
-    $psi.UseShellExecute = $false
-    $psi.RedirectStandardInput = $true
-    $psi.RedirectStandardOutput = $true
-    $psi.RedirectStandardError = $true
-    $psi.CreateNoWindow = $true
-
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo = $psi
-    [void]$process.Start()
-    $process.StandardInput.Write($helperText)
-    $process.StandardInput.Close()
-    $stdout = $process.StandardOutput.ReadToEnd()
-    $stderr = $process.StandardError.ReadToEnd()
-    $process.WaitForExit()
-
-    if (-not [string]::IsNullOrWhiteSpace($stdout)) {
-        Write-Phase2Log ('WSL stdout: ' + ($stdout.Trim() -replace "[\r\n]+", ' / '))
-    }
-    if (-not [string]::IsNullOrWhiteSpace($stderr)) {
-        Write-Phase2Log ('WSL stderr: ' + ($stderr.Trim() -replace "[\r\n]+", ' / '))
-    }
-    if ($process.ExitCode -ne 0) {
-        throw ('Migration process stopped with exit code ' + $process.ExitCode + '.')
+    $helperWsl = (& $wsl -e wslpath -a -u $helperWin | Select-Object -Last 1).Trim()
+    if ([string]::IsNullOrWhiteSpace($helperWsl)) {
+        throw 'Could not convert the temporary helper path for WSL.'
     }
 
-    $resultLine = @($stdout -split "[\r\n]+" | Where-Object { $_ -like 'PHASE2_RESULT=*' } | Select-Object -Last 1)
+    $outputLines = @(& $wsl -e $pythonPath $helperWsl 2>&1)
+    $processExitCode = $LASTEXITCODE
+    Remove-Item -LiteralPath $helperWin -Force -ErrorAction SilentlyContinue
+
+    $outputText = (@($outputLines | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
+    if (-not [string]::IsNullOrWhiteSpace($outputText)) {
+        Write-Phase2Log ('WSL output: ' + ($outputText.Trim() -replace "[\r\n]+", ' / '))
+    }
+    if ($processExitCode -ne 0) {
+        throw ('Migration process stopped with exit code ' + $processExitCode + '.')
+    }
+
+    $resultLine = @($outputLines | ForEach-Object { [string]$_ } | Where-Object { $_ -like 'PHASE2_RESULT=*' } | Select-Object -Last 1)
     if (-not $resultLine) {
         throw 'Migration result was not returned.'
     }
@@ -174,6 +168,7 @@ try {
     exit 0
 }
 catch {
+    Remove-Item -LiteralPath $helperWin -Force -ErrorAction SilentlyContinue
     Write-Phase2Log ('ERROR: ' + $_.Exception.Message)
     if ($migrationCommitted) {
         Write-Phase2Log 'PHASE2_FRANZ=MIGRATED_VERIFICATION_FAILED'
