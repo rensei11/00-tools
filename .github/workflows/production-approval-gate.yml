@@ -124,6 +124,46 @@ jobs:
               }
           }
 
+          $legacyAuditCmd = 'ai-voice/phase2/03_phase2_legacy_dependency_audit.cmd'
+          $legacyAuditPs1 = 'ai-voice/phase2/phase2_legacy_dependency_audit_v1.ps1'
+
+          $legacyAuditCmdBytes = [IO.File]::ReadAllBytes($legacyAuditCmd)
+          if (@($legacyAuditCmdBytes | Where-Object { $_ -gt 127 }).Count -ne 0) {
+              throw 'Phase2 legacy audit CMD must remain ASCII-only.'
+          }
+
+          $legacyAuditPs1Bytes = [IO.File]::ReadAllBytes($legacyAuditPs1)
+          if ($legacyAuditPs1Bytes.Length -lt 3 -or
+              $legacyAuditPs1Bytes[0] -ne 0xEF -or
+              $legacyAuditPs1Bytes[1] -ne 0xBB -or
+              $legacyAuditPs1Bytes[2] -ne 0xBF) {
+              throw 'Phase2 legacy audit PS1 with non-ASCII text must remain UTF-8 BOM.'
+          }
+
+          $legacyAuditTokens = $null
+          $legacyAuditErrors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $legacyAuditPs1),
+              [ref]$legacyAuditTokens,
+              [ref]$legacyAuditErrors
+          )
+          if (@($legacyAuditErrors).Count -ne 0) {
+              throw ('Phase2 legacy audit PowerShell parse failed: ' + $legacyAuditErrors[0].Message)
+          }
+
+          $legacyAuditText = [IO.File]::ReadAllText($legacyAuditPs1, [Text.Encoding]::UTF8)
+          foreach ($required in @(
+              'PHASE2_LEGACY_AUDIT=START',
+              'STANDARD_MANIFEST|',
+              'EMOTION2VEC|',
+              'READ_ONLY_CONFIRMATION=No files were created, modified, moved, renamed, or deleted.',
+              'PHASE2_LEGACY_AUDIT=SUCCESS'
+          )) {
+              if (-not $legacyAuditText.Contains($required)) {
+                  throw ('Phase2 legacy audit guard is missing: ' + $required)
+              }
+          }
+
           $updater = [IO.File]::ReadAllText($updaterPath, [Text.Encoding]::UTF8)
           foreach ($required in @(
               '[switch]$RepairButton',
