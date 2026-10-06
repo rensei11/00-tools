@@ -43,6 +43,46 @@ jobs:
               throw ('public updater parse failed: ' + $errors[0].Message)
           }
 
+          $phase2Cmd = 'ai-voice/phase2/01_雲菫Phase2_FLAC移行.cmd'
+          $phase2Ps1 = 'ai-voice/phase2/yunjin_phase2_flac_v1.ps1'
+
+          $phase2CmdBytes = [IO.File]::ReadAllBytes($phase2Cmd)
+          if (@($phase2CmdBytes | Where-Object { $_ -gt 127 }).Count -ne 0) {
+              throw 'Yun Jin Phase2 CMD must remain ASCII-only.'
+          }
+
+          $phase2Ps1Bytes = [IO.File]::ReadAllBytes($phase2Ps1)
+          if ($phase2Ps1Bytes.Length -lt 3 -or
+              $phase2Ps1Bytes[0] -ne 0xEF -or
+              $phase2Ps1Bytes[1] -ne 0xBB -or
+              $phase2Ps1Bytes[2] -ne 0xBF) {
+              throw 'Yun Jin Phase2 PS1 with non-ASCII text must remain UTF-8 BOM.'
+          }
+
+          $phase2Tokens = $null
+          $phase2Errors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $phase2Ps1),
+              [ref]$phase2Tokens,
+              [ref]$phase2Errors
+          )
+          if (@($phase2Errors).Count -ne 0) {
+              throw ('Yun Jin Phase2 PowerShell parse failed: ' + $phase2Errors[0].Message)
+          }
+
+          $phase2Text = [IO.File]::ReadAllText($phase2Ps1, [Text.Encoding]::UTF8)
+          foreach ($required in @(
+              'Direct production-root audit:',
+              'Phase2 requires an existing reference and will not create or rebuild one.',
+              'Live-app audit:',
+              'The app and migration root disagree.',
+              'PHASE2_YUNJIN=SUCCESS'
+          )) {
+              if (-not $phase2Text.Contains($required)) {
+                  throw ('Yun Jin Phase2 guard is missing: ' + $required)
+              }
+          }
+
           $updater = [IO.File]::ReadAllText($updaterPath, [Text.Encoding]::UTF8)
           foreach ($required in @(
               '[switch]$RepairButton',
