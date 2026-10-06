@@ -401,6 +401,131 @@ jobs:
               throw 'Meryl Phase2 packaged CMD self-test did not report PASS.'
           }
 
+          # Paimon package revision: self-contained-v2
+          $paimonCmd = 'ai-voice/phase2/06_paimon_phase2_flac.cmd'
+          $paimonPs1 = 'ai-voice/phase2/paimon_phase2_flac_v1.ps1'
+          $paimonHelper = 'ai-voice/phase2/paimon_phase2_migrate_v1.py'
+          $paimonZip = 'ai-voice/phase2/Phase2_Paimon_FLAC.zip'
+
+          $paimonCmdBytes = [IO.File]::ReadAllBytes($paimonCmd)
+          if (@($paimonCmdBytes | Where-Object { $_ -gt 127 }).Count -ne 0) {
+              throw 'Paimon Phase2 CMD must remain ASCII-only.'
+          }
+
+          $paimonPs1Bytes = [IO.File]::ReadAllBytes($paimonPs1)
+          if ($paimonPs1Bytes.Length -lt 3 -or
+              $paimonPs1Bytes[0] -ne 0xEF -or
+              $paimonPs1Bytes[1] -ne 0xBB -or
+              $paimonPs1Bytes[2] -ne 0xBF) {
+              throw 'Paimon Phase2 PS1 with non-ASCII text must remain UTF-8 BOM.'
+          }
+
+          $paimonTokens = $null
+          $paimonErrors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $paimonPs1),
+              [ref]$paimonTokens,
+              [ref]$paimonErrors
+          )
+          if (@($paimonErrors).Count -ne 0) {
+              throw ('Paimon Phase2 PowerShell parse failed: ' + $paimonErrors[0].Message)
+          }
+
+          python -m py_compile $paimonHelper
+          if ($LASTEXITCODE -ne 0) {
+              throw ('Paimon Phase2 helper compile failed with exit code ' + $LASTEXITCODE)
+          }
+          $paimonHelperTest = @(& python $paimonHelper --self-test 2>&1)
+          if ($LASTEXITCODE -ne 0 -or (@($paimonHelperTest | ForEach-Object { [string]$_ }) -notcontains 'PAIMON_PHASE2_SELF_TEST=PASS')) {
+              throw ('Paimon Phase2 helper self-test failed: ' + ((@($paimonHelperTest | ForEach-Object { [string]$_ })) -join ' / '))
+          }
+
+          $paimonText = [IO.File]::ReadAllText($paimonPs1, [Text.Encoding]::UTF8)
+          foreach ($required in @(
+              'param([switch]$PackageSelfTest)',
+              '$PSScriptRoot',
+              'paimon_phase2_migrate_v1.py',
+              'wavCount -ne 84 -or $flacCount -ne 0',
+              'wslpath -a -u $helperWin',
+              'Migration committed:',
+              'PHASE2_PAIMON=MIGRATED_VERIFICATION_FAILED',
+              'PHASE2_PAIMON=SUCCESS'
+          )) {
+              if (-not $paimonText.Contains($required)) {
+                  throw ('Paimon Phase2 guard is missing: ' + $required)
+              }
+          }
+          if ($paimonText.Contains('Invoke-WebRequest') -or
+              $paimonText.Contains('raw.githubusercontent.com') -or
+              $paimonText.Contains('StandardInput')) {
+              throw 'Paimon Phase2 PS1 must not use runtime download or stdin helper transport.'
+          }
+
+          $paimonHelperText = [IO.File]::ReadAllText($paimonHelper, [Text.Encoding]::UTF8)
+          foreach ($required in @(
+              'EXPECTED_WAV_COUNT = 84',
+              'EXPECTED_STANDARD_REF_COUNT = 23',
+              'EXPECTED_EMOTION_CACHE_COUNT = 84',
+              'EXPECTED_COMPARISON_REF_COUNT = 14',
+              'EXPECTED_TOOL_PLAN_DISTINCT_WAVS = 37',
+              '"angry.json": 11',
+              '"cheerful.json": 14',
+              '"gentle.json": 8',
+              '"surprised.json": 14',
+              '"worried.json": 11',
+              'paimon_emotion_pools.json',
+              'PAIMON_PHASE2_SELF_TEST=PASS'
+          )) {
+              if (-not $paimonHelperText.Contains($required)) {
+                  throw ('Paimon Phase2 helper guard is missing: ' + $required)
+              }
+          }
+
+          $paimonZipHandle = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $paimonZip))
+          try {
+              $entryNames = @($paimonZipHandle.Entries | ForEach-Object { $_.FullName } | Sort-Object)
+              $expectedNames = @(
+                  '06_paimon_phase2_flac.cmd',
+                  'paimon_phase2_flac_v1.ps1',
+                  'paimon_phase2_migrate_v1.py'
+              ) | Sort-Object
+              if ($entryNames.Count -ne $expectedNames.Count) {
+                  throw 'Paimon Phase2 ZIP entry count is invalid.'
+              }
+              for ($index = 0; $index -lt $expectedNames.Count; $index++) {
+                  if ($entryNames[$index] -cne $expectedNames[$index]) {
+                      throw ('Paimon Phase2 ZIP entry mismatch: ' + $entryNames[$index])
+                  }
+              }
+          }
+          finally {
+              $paimonZipHandle.Dispose()
+          }
+
+          $paimonExtractRoot = Join-Path $env:RUNNER_TEMP 'paimon-phase2-package'
+          Remove-Item -LiteralPath $paimonExtractRoot -Recurse -Force -ErrorAction SilentlyContinue
+          [IO.Compression.ZipFile]::ExtractToDirectory((Resolve-Path $paimonZip), $paimonExtractRoot)
+
+          $env:PAIMON_PHASE2_PACKAGE_SELF_TEST = '1'
+          try {
+              & (Join-Path $paimonExtractRoot '06_paimon_phase2_flac.cmd')
+              if ($LASTEXITCODE -ne 0) {
+                  throw ('Paimon Phase2 packaged CMD self-test failed with exit code ' + $LASTEXITCODE)
+              }
+          }
+          finally {
+              Remove-Item Env:PAIMON_PHASE2_PACKAGE_SELF_TEST -ErrorAction SilentlyContinue
+          }
+
+          $paimonPackageLog = Join-Path $env:TEMP 'rensei_paimon_phase2_flac_log.txt'
+          if (-not (Test-Path -LiteralPath $paimonPackageLog -PathType Leaf)) {
+              throw 'Paimon Phase2 packaged CMD self-test did not create its log.'
+          }
+          $paimonPackageLogText = [IO.File]::ReadAllText($paimonPackageLog, [Text.Encoding]::UTF8)
+          if (-not $paimonPackageLogText.Contains('PAIMON_PHASE2_PACKAGE_SELF_TEST=PASS')) {
+              throw 'Paimon Phase2 packaged CMD self-test did not report PASS.'
+          }
+
           $updater = [IO.File]::ReadAllText($updaterPath, [Text.Encoding]::UTF8)
           foreach ($required in @(
               '[switch]$RepairButton',
