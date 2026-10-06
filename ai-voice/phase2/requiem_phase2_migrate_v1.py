@@ -582,7 +582,7 @@ def _build_fixture(root: Path, tool_root: Path) -> tuple[Path, list[Path]]:
     for index in range(EXPECTED_WAV_COUNT):
         name = f"requiem_{index:02d}.wav"
         wav = folder / name
-        wav.write_bytes((f"wav-{index:02d}-".encode("ascii")) * 100000)
+        wav.write_bytes((f"wav-{index:02d}-".encode("ascii")) * 2000)
         wavs.append(wav)
         rows.append(
             {
