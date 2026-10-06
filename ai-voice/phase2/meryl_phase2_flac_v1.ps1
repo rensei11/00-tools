@@ -43,7 +43,7 @@ try {
         $utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
         $helperText = [IO.File]::ReadAllText($helperWin, $utf8Strict)
         foreach ($required in @(
-            'EXPECTED_WAV_COUNT = 20',
+            'EXPECTED_WAV_COUNT = 46',
             'def _preflight(',
             'def migrate(',
             'MERYL_PHASE2_SELF_TEST=PASS'
@@ -124,7 +124,7 @@ try {
     $utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
     $helperText = [IO.File]::ReadAllText($helperWin, $utf8Strict)
     foreach ($required in @(
-        'EXPECTED_WAV_COUNT = 20',
+        'EXPECTED_WAV_COUNT = 46',
         'def _preflight(',
         'def migrate(',
         'MERYL_PHASE2_SELF_TEST=PASS',
