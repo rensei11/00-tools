@@ -283,6 +283,124 @@ jobs:
               throw 'Franz Phase2 packaged CMD self-test did not report PASS.'
           }
 
+          $merylCmd = 'ai-voice/phase2/05_meryl_phase2_flac.cmd'
+          $merylPs1 = 'ai-voice/phase2/meryl_phase2_flac_v1.ps1'
+          $merylHelper = 'ai-voice/phase2/meryl_phase2_migrate_v1.py'
+          $merylZip = 'ai-voice/phase2/Phase2_Meryl_FLAC.zip'
+
+          $merylCmdBytes = [IO.File]::ReadAllBytes($merylCmd)
+          if (@($merylCmdBytes | Where-Object { $_ -gt 127 }).Count -ne 0) {
+              throw 'Meryl Phase2 CMD must remain ASCII-only.'
+          }
+
+          $merylPs1Bytes = [IO.File]::ReadAllBytes($merylPs1)
+          if ($merylPs1Bytes.Length -lt 3 -or
+              $merylPs1Bytes[0] -ne 0xEF -or
+              $merylPs1Bytes[1] -ne 0xBB -or
+              $merylPs1Bytes[2] -ne 0xBF) {
+              throw 'Meryl Phase2 PS1 with non-ASCII text must remain UTF-8 BOM.'
+          }
+
+          $merylTokens = $null
+          $merylErrors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $merylPs1),
+              [ref]$merylTokens,
+              [ref]$merylErrors
+          )
+          if (@($merylErrors).Count -ne 0) {
+              throw ('Meryl Phase2 PowerShell parse failed: ' + $merylErrors[0].Message)
+          }
+
+          python -m py_compile $merylHelper
+          if ($LASTEXITCODE -ne 0) {
+              throw ('Meryl Phase2 helper compile failed with exit code ' + $LASTEXITCODE)
+          }
+          $merylHelperTest = @(& python $merylHelper --self-test 2>&1)
+          if ($LASTEXITCODE -ne 0 -or (@($merylHelperTest | ForEach-Object { [string]$_ }) -notcontains 'MERYL_PHASE2_SELF_TEST=PASS')) {
+              throw ('Meryl Phase2 helper self-test failed: ' + ((@($merylHelperTest | ForEach-Object { [string]$_ })) -join ' / '))
+          }
+
+          $merylText = [IO.File]::ReadAllText($merylPs1, [Text.Encoding]::UTF8)
+          foreach ($required in @(
+              'param([switch]$PackageSelfTest)',
+              '$PSScriptRoot',
+              'meryl_phase2_migrate_v1.py',
+              'wavCount -ne 46 -or $flacCount -ne 0',
+              'wslpath -a -u $helperWin',
+              'Migration committed:',
+              'PHASE2_MERYL=MIGRATED_VERIFICATION_FAILED',
+              'PHASE2_MERYL=SUCCESS'
+          )) {
+              if (-not $merylText.Contains($required)) {
+                  throw ('Meryl Phase2 guard is missing: ' + $required)
+              }
+          }
+          if ($merylText.Contains('Invoke-WebRequest') -or
+              $merylText.Contains('raw.githubusercontent.com') -or
+              $merylText.Contains('StandardInput')) {
+              throw 'Meryl Phase2 PS1 must not use runtime download or stdin helper transport.'
+          }
+
+          $merylHelperText = [IO.File]::ReadAllText($merylHelper, [Text.Encoding]::UTF8)
+          foreach ($required in @(
+              'EXPECTED_WAV_COUNT = 46',
+              'EXPECTED_STANDARD_REF_COUNT = 29',
+              'EXPECTED_EMOTION_CACHE_COUNT = 29',
+              '"gentle.json": 23',
+              '"surprised.json": 19',
+              'MERYL_PHASE2_SELF_TEST=PASS'
+          )) {
+              if (-not $merylHelperText.Contains($required)) {
+                  throw ('Meryl Phase2 helper guard is missing: ' + $required)
+              }
+          }
+
+          $merylZipHandle = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $merylZip))
+          try {
+              $entryNames = @($merylZipHandle.Entries | ForEach-Object { $_.FullName } | Sort-Object)
+              $expectedNames = @(
+                  '05_meryl_phase2_flac.cmd',
+                  'meryl_phase2_flac_v1.ps1',
+                  'meryl_phase2_migrate_v1.py'
+              ) | Sort-Object
+              if ($entryNames.Count -ne $expectedNames.Count) {
+                  throw 'Meryl Phase2 ZIP entry count is invalid.'
+              }
+              for ($index = 0; $index -lt $expectedNames.Count; $index++) {
+                  if ($entryNames[$index] -cne $expectedNames[$index]) {
+                      throw ('Meryl Phase2 ZIP entry mismatch: ' + $entryNames[$index])
+                  }
+              }
+          }
+          finally {
+              $merylZipHandle.Dispose()
+          }
+
+          $merylExtractRoot = Join-Path $env:RUNNER_TEMP 'meryl-phase2-package'
+          Remove-Item -LiteralPath $merylExtractRoot -Recurse -Force -ErrorAction SilentlyContinue
+          [IO.Compression.ZipFile]::ExtractToDirectory((Resolve-Path $merylZip), $merylExtractRoot)
+
+          $env:MERYL_PHASE2_PACKAGE_SELF_TEST = '1'
+          try {
+              & (Join-Path $merylExtractRoot '05_meryl_phase2_flac.cmd')
+              if ($LASTEXITCODE -ne 0) {
+                  throw ('Meryl Phase2 packaged CMD self-test failed with exit code ' + $LASTEXITCODE)
+              }
+          }
+          finally {
+              Remove-Item Env:MERYL_PHASE2_PACKAGE_SELF_TEST -ErrorAction SilentlyContinue
+          }
+
+          $merylPackageLog = Join-Path $env:TEMP 'rensei_meryl_phase2_flac_log.txt'
+          if (-not (Test-Path -LiteralPath $merylPackageLog -PathType Leaf)) {
+              throw 'Meryl Phase2 packaged CMD self-test did not create its log.'
+          }
+          $merylPackageLogText = [IO.File]::ReadAllText($merylPackageLog, [Text.Encoding]::UTF8)
+          if (-not $merylPackageLogText.Contains('MERYL_PHASE2_PACKAGE_SELF_TEST=PASS')) {
+              throw 'Meryl Phase2 packaged CMD self-test did not report PASS.'
+          }
+
           $updater = [IO.File]::ReadAllText($updaterPath, [Text.Encoding]::UTF8)
           foreach ($required in @(
               '[switch]$RepairButton',
