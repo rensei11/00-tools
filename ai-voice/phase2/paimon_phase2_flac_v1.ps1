@@ -128,6 +128,8 @@ try {
         'def _preflight(',
         'def migrate(',
         'PAIMON_PHASE2_SELF_TEST=PASS',
+        'PAIMON_PREFLIGHT=',
+        'PAIMON_MIGRATION_ERROR=',
         'PHASE2_RESULT='
     )) {
         if ($helperText.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
@@ -140,17 +142,43 @@ try {
         throw 'Could not convert the temporary helper path for WSL.'
     }
 
-    $outputLines = @(& $wsl -e $pythonPath $helperWsl 2>&1)
-    $processExitCode = $LASTEXITCODE
-    $outputText = (@($outputLines | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
-    if (-not [string]::IsNullOrWhiteSpace($outputText)) {
-        Write-Phase2Log ('WSL output: ' + ($outputText.Trim() -replace "[\r\n]+", ' / '))
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $wsl
+    $psi.Arguments = ('-e "' + $pythonPath + '" "' + $helperWsl + '"')
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $psi
+    [void]$process.Start()
+    $stdout = $process.StandardOutput.ReadToEnd()
+    $stderr = $process.StandardError.ReadToEnd()
+    $process.WaitForExit()
+    $processExitCode = $process.ExitCode
+
+    if (-not [string]::IsNullOrWhiteSpace($stdout)) {
+        Write-Phase2Log ('WSL stdout: ' + ($stdout.Trim() -replace "[\r\n]+", ' / '))
     }
+    if (-not [string]::IsNullOrWhiteSpace($stderr)) {
+        Write-Phase2Log ('WSL stderr: ' + ($stderr.Trim() -replace "[\r\n]+", ' / '))
+    }
+
+    $outputLines = @($stdout -split "[\r\n]+")
     if ($processExitCode -ne 0) {
+        $diagnostic = @(
+            $outputLines |
+            Where-Object { $_ -like 'PAIMON_MIGRATION_ERROR=*' } |
+            Select-Object -Last 1
+        )
+        if ($diagnostic) {
+            throw [string]$diagnostic
+        }
         throw ('Migration process stopped with exit code ' + $processExitCode + '.')
     }
 
-    $resultLine = @($outputLines | ForEach-Object { [string]$_ } | Where-Object { $_ -like 'PHASE2_RESULT=*' } | Select-Object -Last 1)
+    $resultLine = @($outputLines | Where-Object { $_ -like 'PHASE2_RESULT=*' } | Select-Object -Last 1)
     if (-not $resultLine) {
         throw 'Migration result was not returned.'
     }
