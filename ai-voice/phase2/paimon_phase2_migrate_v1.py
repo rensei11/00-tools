@@ -18,7 +18,20 @@ EXPECTED_STANDARD_REF_COUNT = 23
 EXPECTED_EMOTION_CACHE_COUNT = 84
 EXPECTED_EMOTION_REFS = {"angry.json": 11, "cheerful.json": 14, "gentle.json": 8, "surprised.json": 14, "worried.json": 11}
 EXPECTED_COMPARISON_REF_COUNT = 14
-EXPECTED_TOOL_PLAN_DISTINCT_WAVS = 37
+EXPECTED_TOOL_JSON_DISTINCT_WAVS = {
+    "shared_results/paimon.json": 84,
+    "shared_results/paimon_selection.json": 16,
+    "shared_results/paimon_emotion_pools.json": 37,
+}
+IGNORED_TOOL_JSON_NAMES = {
+    "_hermes_test_result.json",
+    "_paimon_speaker_similarity_failed.json",
+}
+IGNORED_TOOL_DIR_PREFIXES = (
+    "_backup",
+    "_rescue_backup",
+    "_update",
+)
 
 
 def hash_file(path: Path) -> str:
@@ -149,13 +162,31 @@ def _replace_exact_strings(value: Any, mapping: dict[str, str]) -> Any:
     return value
 
 
-def _scan_tool_json_references(tool_root: Path, wav_names: set[str]) -> list[str]:
+def _is_ignored_tool_json(tool_root: Path, path: Path) -> bool:
+    try:
+        relative = path.relative_to(tool_root)
+    except ValueError:
+        return False
+    if len(relative.parts) == 1 and relative.name in IGNORED_TOOL_JSON_NAMES:
+        return True
+    first = relative.parts[0] if relative.parts else ""
+    return any(first.startswith(prefix) for prefix in IGNORED_TOOL_DIR_PREFIXES)
+
+
+def _scan_tool_json_references(
+    tool_root: Path,
+    wav_names: set[str],
+    allowed_paths: set[Path] | None = None,
+) -> list[str]:
     hits: list[str] = []
     if not tool_root.is_dir():
         return hits
 
+    allowed = {path.resolve() for path in (allowed_paths or set())}
     for path in tool_root.rglob("*.json"):
         if not path.is_file():
+            continue
+        if path.resolve() in allowed or _is_ignored_tool_json(tool_root, path):
             continue
         raw = path.read_text(encoding="utf-8-sig", errors="replace")
         if any(name in raw for name in wav_names):
@@ -307,17 +338,22 @@ def _preflight(root: Path, tool_root: Path, character: str) -> dict[str, Any]:
     comparison_data = {comparison_path: comparison_value}
 
     tool_root = Path(tool_root)
-    tool_plan_path = tool_root / "shared_results" / "paimon_emotion_pools.json"
-    tool_plan = read_json(tool_plan_path, None)
-    if not isinstance(tool_plan, dict):
-        raise ValueError("paimon_emotion_pools.jsonを安全に読めません。")
-    tool_wav_values = _collect_wav_strings(tool_plan)
-    tool_distinct = set(tool_wav_values)
-    if (
-        len(tool_distinct) != EXPECTED_TOOL_PLAN_DISTINCT_WAVS
-        or any(name not in wav_names for name in tool_distinct)
-    ):
-        raise ValueError("paimon_emotion_pools.jsonのWAV参照が実機監査時の37種類と一致しません。")
+    tool_json_data: dict[Path, dict[str, Any]] = {}
+    for relative_name, expected_distinct in EXPECTED_TOOL_JSON_DISTINCT_WAVS.items():
+        path = tool_root / Path(relative_name)
+        value = read_json(path, None)
+        if not isinstance(value, dict):
+            raise ValueError(f"{relative_name}を安全に読めません。")
+        distinct = set(_collect_wav_strings(value))
+        if (
+            len(distinct) != expected_distinct
+            or any(name not in wav_names for name in distinct)
+        ):
+            raise ValueError(
+                f"{relative_name}のWAV参照が実機監査時の"
+                f"{expected_distinct}種類と一致しません。"
+            )
+        tool_json_data[path] = value
 
     emotion_cache = read_json(emotion_cache_path, None)
     items = emotion_cache.get("items") if isinstance(emotion_cache, dict) else None
@@ -349,17 +385,15 @@ def _preflight(root: Path, tool_root: Path, character: str) -> dict[str, Any]:
                 f"想定外JSONがWAV名を参照しています：{path.relative_to(folder)}"
             )
 
-    external_hits: list[str] = []
-    if tool_root.is_dir():
-        for path in tool_root.rglob("*.json"):
-            if not path.is_file() or path.resolve() == tool_plan_path.resolve():
-                continue
-            raw = path.read_text(encoding="utf-8-sig", errors="replace")
-            if any(name in raw for name in wav_names):
-                external_hits.append(str(path.relative_to(tool_root)))
+    external_hits = _scan_tool_json_references(
+        tool_root,
+        wav_names,
+        allowed_paths=set(tool_json_data),
+    )
     if external_hits:
         raise ValueError(
-            "既知のpaimon_emotion_pools.json以外のツール側JSONがパイモンWAV名を参照しています："
+            "現役3ファイル・バックアップ・診断ファイル以外のツール側JSONが"
+            "パイモンWAV名を参照しています："
             + ",".join(external_hits)
         )
 
@@ -385,8 +419,7 @@ def _preflight(root: Path, tool_root: Path, character: str) -> dict[str, Any]:
         "manifest_data": manifest_data,
         "emotion_data": emotion_data,
         "comparison_data": comparison_data,
-        "tool_plan_path": tool_plan_path,
-        "tool_plan": tool_plan,
+        "tool_json_data": tool_json_data,
         "emotion_cache_path": emotion_cache_path,
         "emotion_cache": emotion_cache,
         "selected_before": selected_before,
@@ -410,19 +443,18 @@ def migrate(
     manifest_data: dict[Path, dict[str, Any]] = state["manifest_data"]
     emotion_data: dict[Path, dict[str, Any]] = state["emotion_data"]
     comparison_data: dict[Path, dict[str, Any]] = state["comparison_data"]
-    tool_plan_path: Path = state["tool_plan_path"]
-    tool_plan: dict[str, Any] = state["tool_plan"]
+    tool_json_data: dict[Path, dict[str, Any]] = state["tool_json_data"]
     emotion_cache_path: Path = state["emotion_cache_path"]
     emotion_cache: dict[str, Any] = state["emotion_cache"]
 
     json_objects: dict[Path, dict[str, Any]] = {
         meta_path: data,
         emotion_cache_path: emotion_cache,
-        tool_plan_path: tool_plan,
     }
     json_objects.update(manifest_data)
     json_objects.update(emotion_data)
     json_objects.update(comparison_data)
+    json_objects.update(tool_json_data)
 
     original_json = {path: path.read_bytes() for path in json_objects}
     created: list[Path] = []
@@ -479,7 +511,8 @@ def migrate(
 
         for value in comparison_data.values():
             _replace_exact_strings(value, mapping)
-        _replace_exact_strings(tool_plan, mapping)
+        for value in tool_json_data.values():
+            _replace_exact_strings(value, mapping)
 
         cache_items = emotion_cache["items"]
         for old_name, new_name in mapping.items():
@@ -508,7 +541,8 @@ def migrate(
             list(manifest_data)
             + list(emotion_data)
             + list(comparison_data)
-            + [emotion_cache_path, tool_plan_path]
+            + list(tool_json_data)
+            + [emotion_cache_path]
         ):
             raw = path.read_text(encoding="utf-8-sig", errors="replace")
             stale = [old_name for old_name in mapping if old_name in raw]
@@ -674,11 +708,43 @@ def _build_fixture(root: Path, tool_root: Path) -> tuple[Path, list[Path]]:
         },
     )
 
-    tool_plan_path = tool_root / "shared_results" / "paimon_emotion_pools.json"
-    tool_plan_path.parent.mkdir(parents=True, exist_ok=True)
+    shared_root = tool_root / "shared_results"
+    shared_root.mkdir(parents=True, exist_ok=True)
+
+    write_json(
+        shared_root / "paimon.json",
+        {
+            "schema_version": 1,
+            "status": "ready",
+            "candidates": [{"filename": wav.name} for wav in wavs],
+            "embedding": {"candidate_order": [wav.name for wav in wavs]},
+            "manual_reference_set": {
+                "files_in_order": [wav.name for wav in wavs[:23]]
+            },
+        },
+    )
+
+    write_json(
+        shared_root / "paimon_selection.json",
+        {
+            "schema_version": 1,
+            "selection": {
+                "files_in_order": [wav.name for wav in wavs[:14]]
+            },
+            "manual_reference_set_comparison": {
+                "representative_high_similarity_pair": {
+                    "files": [wavs[0].name, wavs[14].name]
+                },
+                "representative_auto_contrast": {
+                    "filename": wavs[15].name
+                },
+            },
+        },
+    )
+
     plan_names = [wav.name for wav in wavs[:37]]
     write_json(
-        tool_plan_path,
+        shared_root / "paimon_emotion_pools.json",
         {
             "schema_version": 1,
             "character": EXPECTED_CHARACTER,
@@ -704,6 +770,15 @@ def _build_fixture(root: Path, tool_root: Path) -> tuple[Path, list[Path]]:
                 },
             },
         },
+    )
+
+    backup_path = tool_root / "_backup" / "old" / "shared_results" / "paimon.json"
+    backup_path.parent.mkdir(parents=True, exist_ok=True)
+    write_json(backup_path, {"filename": wavs[0].name})
+    write_json(tool_root / "_hermes_test_result.json", {"filename": wavs[1].name})
+    write_json(
+        tool_root / "_paimon_speaker_similarity_failed.json",
+        {"filename": wavs[2].name},
     )
     return folder, wavs
 
@@ -762,14 +837,25 @@ def self_test() -> None:
         assert len(comparison["files_in_order"]) == EXPECTED_COMPARISON_REF_COUNT
         assert all(name.endswith(".flac") for name in comparison["files_in_order"])
 
-        tool_plan = read_json(
-            tool_root / "shared_results" / "paimon_emotion_pools.json",
+        for relative_name in EXPECTED_TOOL_JSON_DISTINCT_WAVS:
+            tool_value = read_json(tool_root / relative_name, {})
+            tool_names = _collect_wav_strings(tool_value)
+            assert tool_names == []
+            serialized = json.dumps(tool_value, ensure_ascii=False)
+            assert ".flac" in serialized
+
+        ignored_backup = read_json(
+            tool_root / "_backup" / "old" / "shared_results" / "paimon.json",
             {},
         )
-        tool_names = _collect_wav_strings(tool_plan)
-        assert tool_names == []
-        serialized = json.dumps(tool_plan, ensure_ascii=False)
-        assert ".flac" in serialized
+        ignored_hermes = read_json(tool_root / "_hermes_test_result.json", {})
+        ignored_failed = read_json(
+            tool_root / "_paimon_speaker_similarity_failed.json",
+            {},
+        )
+        assert ignored_backup["filename"].endswith(".wav")
+        assert ignored_hermes["filename"].endswith(".wav")
+        assert ignored_failed["filename"].endswith(".wav")
 
     with tempfile.TemporaryDirectory(prefix="paimon_phase2_block_") as temp:
         base = Path(temp)
@@ -829,7 +915,9 @@ def main() -> int:
                             + len(state["emotion_data"])
                             + len(state["comparison_data"])
                         ),
-                        "tool_plan": str(state["tool_plan_path"]),
+                        "tool_jsons": [
+                            str(path) for path in state["tool_json_data"]
+                        ],
                     },
                     ensure_ascii=True,
                     separators=(",", ":"),
