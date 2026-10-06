@@ -578,8 +578,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
               throw ('Requiem Phase2 helper compile failed with exit code ' + $LASTEXITCODE)
           }
+          $requiemSavedErrorAction = $ErrorActionPreference
+          $ErrorActionPreference = 'Continue'
           $requiemHelperTest = @(& python $requiemHelper --self-test 2>&1)
-          if ($LASTEXITCODE -ne 0 -or (@($requiemHelperTest | ForEach-Object { [string]$_ }) -notcontains 'REQUIEM_PHASE2_SELF_TEST=PASS')) {
+          $requiemHelperExit = $LASTEXITCODE
+          $ErrorActionPreference = $requiemSavedErrorAction
+          if ($requiemHelperExit -ne 0 -or (@($requiemHelperTest | ForEach-Object { [string]$_ }) -notcontains 'REQUIEM_PHASE2_SELF_TEST=PASS')) {
               throw ('Requiem Phase2 helper self-test failed: ' + ((@($requiemHelperTest | ForEach-Object { [string]$_ })) -join ' / '))
           }
 
