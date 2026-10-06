@@ -164,6 +164,48 @@ jobs:
               }
           }
 
+          $franzCmd = 'ai-voice/phase2/04_franz_phase2_flac.cmd'
+          $franzPs1 = 'ai-voice/phase2/franz_phase2_flac_v1.ps1'
+
+          $franzCmdBytes = [IO.File]::ReadAllBytes($franzCmd)
+          if (@($franzCmdBytes | Where-Object { $_ -gt 127 }).Count -ne 0) {
+              throw 'Franz Phase2 CMD must remain ASCII-only.'
+          }
+
+          $franzPs1Bytes = [IO.File]::ReadAllBytes($franzPs1)
+          if ($franzPs1Bytes.Length -lt 3 -or
+              $franzPs1Bytes[0] -ne 0xEF -or
+              $franzPs1Bytes[1] -ne 0xBB -or
+              $franzPs1Bytes[2] -ne 0xBF) {
+              throw 'Franz Phase2 PS1 with non-ASCII text must remain UTF-8 BOM.'
+          }
+
+          $franzTokens = $null
+          $franzErrors = $null
+          [void][Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $franzPs1),
+              [ref]$franzTokens,
+              [ref]$franzErrors
+          )
+          if (@($franzErrors).Count -ne 0) {
+              throw ('Franz Phase2 PowerShell parse failed: ' + $franzErrors[0].Message)
+          }
+
+          $franzText = [IO.File]::ReadAllText($franzPs1, [Text.Encoding]::UTF8)
+          foreach ($required in @(
+              'Phase2 Franz legacy migration: START',
+              '06b40de143f1f7d34d5157454651f02712b20d82',
+              'wavCount -ne 20 -or $flacCount -ne 0',
+              'def migrate_legacy_existing_wavs',
+              'Migration committed:',
+              'PHASE2_FRANZ=MIGRATED_VERIFICATION_FAILED',
+              'PHASE2_FRANZ=SUCCESS'
+          )) {
+              if (-not $franzText.Contains($required)) {
+                  throw ('Franz Phase2 guard is missing: ' + $required)
+              }
+          }
+
           $updater = [IO.File]::ReadAllText($updaterPath, [Text.Encoding]::UTF8)
           foreach ($required in @(
               '[switch]$RepairButton',
