@@ -253,11 +253,31 @@ jobs:
               throw 'Franz Phase2 helper contains a private repository route.'
           }
 
+          $transportPath = Join-Path $env:RUNNER_TEMP 'rensei_franz_phase2_migrate_transport_test.py'
+          Remove-Item -LiteralPath $transportPath -Force -ErrorAction SilentlyContinue
+          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+          Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/rensei11/00-tools/ee56034d2be4dce92a0927b830aefc275e842079/ai-voice/phase2/franz_phase2_migrate_v1.py' -OutFile $transportPath -TimeoutSec 30
+          $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
+          $transportText = [IO.File]::ReadAllText($transportPath, $strictUtf8)
+          if (-not $transportText.Contains('EXPECTED_WAV_COUNT = 20') -or
+              -not $transportText.Contains('FRANZ_PHASE2_SELF_TEST=PASS')) {
+              throw 'Downloaded Franz helper UTF-8 validation markers are missing.'
+          }
+          python $transportPath --self-test
+          if ($LASTEXITCODE -ne 0) {
+              throw ('Downloaded Franz helper self-test failed with exit code ' + $LASTEXITCODE)
+          }
+          Remove-Item -LiteralPath $transportPath -Force -ErrorAction SilentlyContinue
+
           $franzText = [IO.File]::ReadAllText($franzPs1, [Text.Encoding]::UTF8)
           foreach ($required in @(
               'Phase2 Franz legacy migration: START',
               'franz_phase2_migrate_v1.py',
+              'ee56034d2be4dce92a0927b830aefc275e842079',
               'wavCount -ne 20 -or $flacCount -ne 0',
+              '-OutFile $helperWin',
+              'UTF8Encoding($false, $true)',
+              'wslpath -a -u $helperWin',
               'Public migration helper is missing required guard:',
               'Migration committed:',
               'PHASE2_FRANZ=MIGRATED_VERIFICATION_FAILED',
@@ -270,6 +290,10 @@ jobs:
 
           if ($franzText.Contains('raw.githubusercontent.com/rensei11/05-AI-voice/')) {
               throw 'Franz Phase2 launcher contains a private raw URL.'
+          }
+
+          if ($franzText.Contains('StandardInput') -or $franzText.Contains("'-e ' + $pythonPath + ' -'")) {
+              throw 'Franz Phase2 launcher reintroduced stdin transport.'
           }
 
           $updater = [IO.File]::ReadAllText($updaterPath, [Text.Encoding]::UTF8)
