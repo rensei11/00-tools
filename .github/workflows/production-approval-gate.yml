@@ -401,6 +401,7 @@ jobs:
               throw 'Meryl Phase2 packaged CMD self-test did not report PASS.'
           }
 
+          # Paimon package revision: self-contained-v2
           $paimonCmd = 'ai-voice/phase2/06_paimon_phase2_flac.cmd'
           $paimonPs1 = 'ai-voice/phase2/paimon_phase2_flac_v1.ps1'
           $paimonHelper = 'ai-voice/phase2/paimon_phase2_migrate_v1.py'
