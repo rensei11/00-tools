@@ -2,7 +2,7 @@
 $ProgressPreference = 'SilentlyContinue'
 
 $logPath = Join-Path $env:TEMP 'rensei_franz_phase2_flac_log.txt'
-$moduleUrl = 'https://raw.githubusercontent.com/rensei11/05-AI-voice/06b40de143f1f7d34d5157454651f02712b20d82/standard_reference_service.py'
+$helperUrl = 'https://raw.githubusercontent.com/rensei11/00-tools/main/ai-voice/phase2/franz_phase2_migrate_v1.py'
 $appBase = 'http://127.0.0.1:18762'
 $referenceRootWin = 'D:\AI生成ファイル\Irodori-TTS\参照音声'
 $character = 'フランツ'
@@ -86,63 +86,18 @@ try {
     Write-Phase2Log ('Preflight: audited Franz state confirmed / wav=' + $wavCount + ' / flac=' + $flacCount)
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $moduleText = (Invoke-WebRequest -UseBasicParsing -Uri $moduleUrl -TimeoutSec 30).Content
+    $helperText = (Invoke-WebRequest -UseBasicParsing -Uri $helperUrl -TimeoutSec 30).Content
     foreach ($required in @(
-        "PHASE2_LEGACY_PILOT_CHARACTER = 'フランツ'",
-        'def _phase2_legacy_pilot_preflight',
-        'def migrate_legacy_existing_wavs',
-        'wav_cleanup_leftovers'
+        'EXPECTED_WAV_COUNT = 20',
+        'def _preflight(',
+        'def migrate(',
+        'FRANZ_PHASE2_SELF_TEST=PASS',
+        'PHASE2_RESULT='
     )) {
-        if ($moduleText.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
-            throw ('Pinned migration module is missing required guard: ' + $required)
+        if ($helperText.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
+            throw ('Public migration helper is missing required guard: ' + $required)
         }
     }
-    $moduleB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($moduleText))
-
-    $pythonTemplate = @'
-import base64
-import json
-from pathlib import Path
-
-source = base64.b64decode("__MODULE_B64__").decode("utf-8")
-namespace = {"__name__": "standard_reference_service"}
-exec(compile(source, "standard_reference_service.py", "exec"), namespace)
-
-StandardReferenceService = namespace["StandardReferenceService"]
-
-class Collector:
-    def __init__(self, root):
-        self.reference_root = Path(root)
-
-    def character_metadata_path(self, name):
-        return self.reference_root / name / "\u97f3\u58f0\u4e00\u89a7.json"
-
-    @staticmethod
-    def _record_filename(item):
-        raw = str(item.get("local_filename") or item.get("filename") or item.get("path") or "").strip()
-        return raw.replace("\\", "/").rsplit("/", 1)[-1]
-
-    @staticmethod
-    def _read_json(path, default):
-        try:
-            return json.loads(Path(path).read_text(encoding="utf-8-sig"))
-        except Exception:
-            return default
-
-    @staticmethod
-    def _write_json(path, data):
-        path = Path(path)
-        temp = path.with_suffix(path.suffix + ".tmp")
-        temp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        temp.replace(path)
-
-root = Path("/mnt/d/AI\u751f\u6210\u30d5\u30a1\u30a4\u30eb/Irodori-TTS/\u53c2\u7167\u97f3\u58f0")
-character = "\u30d5\u30e9\u30f3\u30c4"
-service = StandardReferenceService(Collector(root))
-result = service.migrate_legacy_existing_wavs(character)
-print("PHASE2_RESULT=" + json.dumps(result, ensure_ascii=True, separators=(",", ":")))
-'@
-    $python = $pythonTemplate.Replace('__MODULE_B64__', $moduleB64)
 
     $psi = New-Object System.Diagnostics.ProcessStartInfo
     $psi.FileName = $wsl
@@ -156,7 +111,7 @@ print("PHASE2_RESULT=" + json.dumps(result, ensure_ascii=True, separators=(",", 
     $process = New-Object System.Diagnostics.Process
     $process.StartInfo = $psi
     [void]$process.Start()
-    $process.StandardInput.Write($python)
+    $process.StandardInput.Write($helperText)
     $process.StandardInput.Close()
     $stdout = $process.StandardOutput.ReadToEnd()
     $stderr = $process.StandardError.ReadToEnd()
