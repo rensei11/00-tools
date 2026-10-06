@@ -43,7 +43,8 @@ jobs:
               throw ('public updater parse failed: ' + $errors[0].Message)
           }
 
-          $phase2Cmd = 'ai-voice/phase2/01_雲菫Phase2_FLAC移行.cmd'
+          $phase2Cmd = (Get-ChildItem -LiteralPath 'ai-voice/phase2' -File -Filter '*.cmd' | Select-Object -First 1).FullName
+          if ([string]::IsNullOrWhiteSpace($phase2Cmd)) { throw 'Yun Jin Phase2 CMD was not found.' }
           $phase2Ps1 = 'ai-voice/phase2/yunjin_phase2_flac_v1.ps1'
 
           $phase2CmdBytes = [IO.File]::ReadAllBytes($phase2Cmd)
