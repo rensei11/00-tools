@@ -545,6 +545,7 @@ jobs:
               throw 'Paimon Phase2 packaged CMD self-test did not report PASS.'
           }
 
+          # Requiem package revision: fixture-utf8-v2
           $requiemCmd = 'ai-voice/phase2/07_requiem_phase2_flac.cmd'
           $requiemPs1 = 'ai-voice/phase2/requiem_phase2_flac_v1.ps1'
           $requiemHelper = 'ai-voice/phase2/requiem_phase2_migrate_v1.py'
