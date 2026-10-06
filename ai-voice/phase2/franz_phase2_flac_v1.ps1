@@ -1,9 +1,10 @@
-﻿$ErrorActionPreference = 'Stop'
+﻿param([switch]$PackageSelfTest)
+
+$ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $logPath = Join-Path $env:TEMP 'rensei_franz_phase2_flac_log.txt'
-$helperUrl = 'https://raw.githubusercontent.com/rensei11/00-tools/ee56034d2be4dce92a0927b830aefc275e842079/ai-voice/phase2/franz_phase2_migrate_v1.py'
-$helperWin = Join-Path $env:TEMP 'rensei_franz_phase2_migrate.py'
+$helperWin = Join-Path $PSScriptRoot 'franz_phase2_migrate_v1.py'
 $appBase = 'http://127.0.0.1:18762'
 $referenceRootWin = 'D:\AI生成ファイル\Irodori-TTS\参照音声'
 $character = 'フランツ'
@@ -33,6 +34,36 @@ function Invoke-JsonPost {
 
 try {
     Remove-Item -LiteralPath $logPath -Force -ErrorAction SilentlyContinue
+
+    if ($PackageSelfTest) {
+        Write-Phase2Log 'Phase2 Franz package self-test: START'
+        if (-not (Test-Path -LiteralPath $helperWin -PathType Leaf)) {
+            throw 'Franz Phase2 package is incomplete: helper Python file was not found.'
+        }
+        $utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
+        $helperText = [IO.File]::ReadAllText($helperWin, $utf8Strict)
+        foreach ($required in @(
+            'EXPECTED_WAV_COUNT = 20',
+            'def _preflight(',
+            'def migrate(',
+            'FRANZ_PHASE2_SELF_TEST=PASS'
+        )) {
+            if ($helperText.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
+                throw ('Package helper is missing required guard: ' + $required)
+            }
+        }
+        $localPython = (Get-Command python.exe -ErrorAction SilentlyContinue).Source
+        if ([string]::IsNullOrWhiteSpace($localPython)) {
+            throw 'Python was not found for package self-test.'
+        }
+        $selfTestOutput = @(& $localPython $helperWin --self-test 2>&1)
+        if ($LASTEXITCODE -ne 0 -or (@($selfTestOutput | ForEach-Object { [string]$_ }) -notcontains 'FRANZ_PHASE2_SELF_TEST=PASS')) {
+            throw ('Package helper self-test failed: ' + ((@($selfTestOutput | ForEach-Object { [string]$_ })) -join ' / '))
+        }
+        Write-Phase2Log 'FRANZ_PHASE2_PACKAGE_SELF_TEST=PASS'
+        exit 0
+    }
+
     Write-Phase2Log 'Phase2 Franz legacy migration: START'
 
     $wsl = Join-Path $env:SystemRoot 'System32\wsl.exe'
@@ -86,9 +117,9 @@ try {
     }
     Write-Phase2Log ('Preflight: audited Franz state confirmed / wav=' + $wavCount + ' / flac=' + $flacCount)
 
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    Remove-Item -LiteralPath $helperWin -Force -ErrorAction SilentlyContinue
-    Invoke-WebRequest -UseBasicParsing -Uri $helperUrl -OutFile $helperWin -TimeoutSec 30
+    if (-not (Test-Path -LiteralPath $helperWin -PathType Leaf)) {
+        throw 'Franz Phase2 package is incomplete: helper Python file was not found.'
+    }
 
     $utf8Strict = New-Object System.Text.UTF8Encoding($false, $true)
     $helperText = [IO.File]::ReadAllText($helperWin, $utf8Strict)
@@ -111,8 +142,6 @@ try {
 
     $outputLines = @(& $wsl -e $pythonPath $helperWsl 2>&1)
     $processExitCode = $LASTEXITCODE
-    Remove-Item -LiteralPath $helperWin -Force -ErrorAction SilentlyContinue
-
     $outputText = (@($outputLines | ForEach-Object { [string]$_ }) -join [Environment]::NewLine)
     if (-not [string]::IsNullOrWhiteSpace($outputText)) {
         Write-Phase2Log ('WSL output: ' + ($outputText.Trim() -replace "[\r\n]+", ' / '))
@@ -168,7 +197,6 @@ try {
     exit 0
 }
 catch {
-    Remove-Item -LiteralPath $helperWin -Force -ErrorAction SilentlyContinue
     Write-Phase2Log ('ERROR: ' + $_.Exception.Message)
     if ($migrationCommitted) {
         Write-Phase2Log 'PHASE2_FRANZ=MIGRATED_VERIFICATION_FAILED'

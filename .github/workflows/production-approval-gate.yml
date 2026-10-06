@@ -170,6 +170,8 @@ jobs:
 
           $franzCmd = 'ai-voice/phase2/04_franz_phase2_flac.cmd'
           $franzPs1 = 'ai-voice/phase2/franz_phase2_flac_v1.ps1'
+          $franzHelper = 'ai-voice/phase2/franz_phase2_migrate_v1.py'
+          $franzZip = 'ai-voice/phase2/Phase2_Franz_FLAC.zip'
 
           $franzCmdBytes = [IO.File]::ReadAllBytes($franzCmd)
           if (@($franzCmdBytes | Where-Object { $_ -gt 127 }).Count -ne 0) {
@@ -195,90 +197,22 @@ jobs:
               throw ('Franz Phase2 PowerShell parse failed: ' + $franzErrors[0].Message)
           }
 
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $franzZip = 'ai-voice/phase2/Phase2_Franz_FLAC.zip'
-          $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $franzZip))
-          try {
-              $entries = @($zip.Entries)
-              if ($entries.Count -ne 1 -or $entries[0].FullName -ne '04_franz_phase2_flac.cmd') {
-                  throw 'Franz Phase2 ZIP contents are invalid.'
-              }
-              $stream = $entries[0].Open()
-              $reader = $null
-              try {
-                  $reader = New-Object IO.StreamReader($stream, [Text.Encoding]::ASCII, $true)
-                  $zipCmdText = $reader.ReadToEnd()
-              }
-              finally {
-                  if ($reader) { $reader.Dispose() } else { $stream.Dispose() }
-              }
-              $diskCmdText = [IO.File]::ReadAllText($franzCmd, [Text.Encoding]::ASCII)
-              $zipLines = @($zipCmdText -split '\r?\n')
-              $diskLines = @($diskCmdText -split '\r?\n')
-              if ($zipLines.Count -ne $diskLines.Count) {
-                  throw 'Franz Phase2 ZIP CMD line count does not match the public CMD.'
-              }
-              for ($index = 0; $index -lt $zipLines.Count; $index++) {
-                  if ($zipLines[$index] -cne $diskLines[$index]) {
-                      throw ('Franz Phase2 ZIP CMD differs from the public CMD at line ' + ($index + 1))
-                  }
-              }
-          }
-          finally {
-              $zip.Dispose()
-          }
-          $franzHelper = 'ai-voice/phase2/franz_phase2_migrate_v1.py'
           python -m py_compile $franzHelper
           if ($LASTEXITCODE -ne 0) {
               throw ('Franz Phase2 helper compile failed with exit code ' + $LASTEXITCODE)
           }
-          python $franzHelper --self-test
-          if ($LASTEXITCODE -ne 0) {
-              throw ('Franz Phase2 helper self-test failed with exit code ' + $LASTEXITCODE)
+          $helperSelfTest = @(& python $franzHelper --self-test 2>&1)
+          if ($LASTEXITCODE -ne 0 -or (@($helperSelfTest | ForEach-Object { [string]$_ }) -notcontains 'FRANZ_PHASE2_SELF_TEST=PASS')) {
+              throw ('Franz Phase2 helper self-test failed: ' + ((@($helperSelfTest | ForEach-Object { [string]$_ })) -join ' / '))
           }
-
-          $helperText = [IO.File]::ReadAllText($franzHelper, [Text.Encoding]::UTF8)
-          foreach ($required in @(
-              'EXPECTED_WAV_COUNT = 20',
-              'def _preflight(',
-              'def migrate(',
-              'FRANZ_PHASE2_SELF_TEST=PASS',
-              'PHASE2_RESULT='
-          )) {
-              if (-not $helperText.Contains($required)) {
-                  throw ('Franz Phase2 helper guard is missing: ' + $required)
-              }
-          }
-          if ($helperText.Contains('rensei11/05-AI-voice')) {
-              throw 'Franz Phase2 helper contains a private repository route.'
-          }
-
-          $transportPath = Join-Path $env:RUNNER_TEMP 'rensei_franz_phase2_migrate_transport_test.py'
-          Remove-Item -LiteralPath $transportPath -Force -ErrorAction SilentlyContinue
-          [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-          Invoke-WebRequest -UseBasicParsing -Uri 'https://raw.githubusercontent.com/rensei11/00-tools/ee56034d2be4dce92a0927b830aefc275e842079/ai-voice/phase2/franz_phase2_migrate_v1.py' -OutFile $transportPath -TimeoutSec 30
-          $strictUtf8 = New-Object System.Text.UTF8Encoding($false, $true)
-          $transportText = [IO.File]::ReadAllText($transportPath, $strictUtf8)
-          if (-not $transportText.Contains('EXPECTED_WAV_COUNT = 20') -or
-              -not $transportText.Contains('FRANZ_PHASE2_SELF_TEST=PASS')) {
-              throw 'Downloaded Franz helper UTF-8 validation markers are missing.'
-          }
-          python $transportPath --self-test
-          if ($LASTEXITCODE -ne 0) {
-              throw ('Downloaded Franz helper self-test failed with exit code ' + $LASTEXITCODE)
-          }
-          Remove-Item -LiteralPath $transportPath -Force -ErrorAction SilentlyContinue
 
           $franzText = [IO.File]::ReadAllText($franzPs1, [Text.Encoding]::UTF8)
           foreach ($required in @(
-              'Phase2 Franz legacy migration: START',
+              'param([switch]$PackageSelfTest)',
+              '$PSScriptRoot',
               'franz_phase2_migrate_v1.py',
-              'ee56034d2be4dce92a0927b830aefc275e842079',
               'wavCount -ne 20 -or $flacCount -ne 0',
-              '-OutFile $helperWin',
-              'UTF8Encoding($false, $true)',
               'wslpath -a -u $helperWin',
-              'Public migration helper is missing required guard:',
               'Migration committed:',
               'PHASE2_FRANZ=MIGRATED_VERIFICATION_FAILED',
               'PHASE2_FRANZ=SUCCESS'
@@ -287,13 +221,66 @@ jobs:
                   throw ('Franz Phase2 guard is missing: ' + $required)
               }
           }
-
-          if ($franzText.Contains('raw.githubusercontent.com/rensei11/05-AI-voice/')) {
-              throw 'Franz Phase2 launcher contains a private raw URL.'
+          if ($franzText.Contains('Invoke-WebRequest') -or
+              $franzText.Contains('raw.githubusercontent.com') -or
+              $franzText.Contains('StandardInput')) {
+              throw 'Franz Phase2 PS1 must not use runtime download or stdin helper transport.'
           }
 
-          if ($franzText.Contains('StandardInput') -or $franzText.Contains("'-e ' + $pythonPath + ' -'")) {
-              throw 'Franz Phase2 launcher reintroduced stdin transport.'
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $franzZip))
+          try {
+              $entryNames = @($zip.Entries | ForEach-Object { $_.FullName } | Sort-Object)
+              $expectedNames = @(
+                  '04_franz_phase2_flac.cmd',
+                  'franz_phase2_flac_v1.ps1',
+                  'franz_phase2_migrate_v1.py'
+              ) | Sort-Object
+              if ($entryNames.Count -ne $expectedNames.Count) {
+                  throw 'Franz Phase2 ZIP entry count is invalid.'
+              }
+              for ($index = 0; $index -lt $expectedNames.Count; $index++) {
+                  if ($entryNames[$index] -cne $expectedNames[$index]) {
+                      throw ('Franz Phase2 ZIP entry mismatch: ' + $entryNames[$index])
+                  }
+              }
+          }
+          finally {
+              $zip.Dispose()
+          }
+
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'franz-phase2-package'
+          Remove-Item -LiteralPath $extractRoot -Recurse -Force -ErrorAction SilentlyContinue
+          [IO.Compression.ZipFile]::ExtractToDirectory((Resolve-Path $franzZip), $extractRoot)
+
+          foreach ($name in @(
+              '04_franz_phase2_flac.cmd',
+              'franz_phase2_flac_v1.ps1',
+              'franz_phase2_migrate_v1.py'
+          )) {
+              if (-not (Test-Path -LiteralPath (Join-Path $extractRoot $name) -PathType Leaf)) {
+                  throw ('Franz Phase2 ZIP extraction is missing: ' + $name)
+              }
+          }
+
+          $env:FRANZ_PHASE2_PACKAGE_SELF_TEST = '1'
+          try {
+              & (Join-Path $extractRoot '04_franz_phase2_flac.cmd')
+              if ($LASTEXITCODE -ne 0) {
+                  throw ('Franz Phase2 packaged CMD self-test failed with exit code ' + $LASTEXITCODE)
+              }
+          }
+          finally {
+              Remove-Item Env:FRANZ_PHASE2_PACKAGE_SELF_TEST -ErrorAction SilentlyContinue
+          }
+
+          $packageLog = Join-Path $env:TEMP 'rensei_franz_phase2_flac_log.txt'
+          if (-not (Test-Path -LiteralPath $packageLog -PathType Leaf)) {
+              throw 'Franz Phase2 packaged CMD self-test did not create its log.'
+          }
+          $packageLogText = [IO.File]::ReadAllText($packageLog, [Text.Encoding]::UTF8)
+          if (-not $packageLogText.Contains('FRANZ_PHASE2_PACKAGE_SELF_TEST=PASS')) {
+              throw 'Franz Phase2 packaged CMD self-test did not report PASS.'
           }
 
           $updater = [IO.File]::ReadAllText($updaterPath, [Text.Encoding]::UTF8)
