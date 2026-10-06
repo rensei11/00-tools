@@ -44,16 +44,66 @@ try {
 
     $char = ([string][char]0x96F2) + ([string][char]0x83EB)
 
+    # Read-only production-root audit before any conversion.
+    $voiceRoot = 'D:\AI生成ファイル\Irodori-TTS\参照音声'
+    $charRoot = Join-Path $voiceRoot $char
+    $metaPath = Join-Path $charRoot '音声一覧.json'
+    $refDir = Join-Path $charRoot '参照セット'
+    $refPt = Join-Path $refDir '120秒.pt'
+    $refJson = Join-Path $refDir '120秒.json'
+    $wavCount = 0
+    $flacCount = 0
+    if (Test-Path -LiteralPath $charRoot -PathType Container) {
+        $wavCount = @(Get-ChildItem -LiteralPath $charRoot -File -Filter '*.wav' -ErrorAction Stop).Count
+        $flacCount = @(Get-ChildItem -LiteralPath $charRoot -File -Filter '*.flac' -ErrorAction Stop).Count
+    }
+    $directState = @{
+        character_dir = (Test-Path -LiteralPath $charRoot -PathType Container)
+        metadata = (Test-Path -LiteralPath $metaPath -PathType Leaf)
+        reference_pt = (Test-Path -LiteralPath $refPt -PathType Leaf)
+        reference_json = (Test-Path -LiteralPath $refJson -PathType Leaf)
+        wav_count = $wavCount
+        flac_count = $flacCount
+    }
+    Write-Phase2Log ('Direct production-root audit: ' + ($directState | ConvertTo-Json -Compress))
+
+    if (-not $directState.character_dir) {
+        throw 'Yun Jin character folder is not present in the official reference-audio root. No audio files were changed.'
+    }
+    if (-not $directState.metadata) {
+        throw 'Yun Jin audio-list metadata is missing. No audio files were changed.'
+    }
+    if (-not $directState.reference_pt -or -not $directState.reference_json) {
+        throw 'Yun Jin does not currently have both 120-second reference files in the official reference-audio root. Phase2 requires an existing reference and will not create or rebuild one. No audio files were changed.'
+    }
+
     try {
+        $savedBefore = Invoke-JsonPost -Uri ($appBase + '/voice/load') -Body @{ character = $char } -TimeoutSec 15
         $speakers = Invoke-RestMethod -Uri ($appBase + '/speakers') -Method Get -TimeoutSec 3
     }
     catch {
-        throw 'AI voice tool is not running. Start it first, then run this file again. No audio files were changed.'
+        throw 'The running AI voice tool could not complete the clean-rebuild preflight. No audio files were changed.'
     }
-    if (@($speakers.speakers) -notcontains $char) {
-        throw 'Yun Jin is not currently available in the voice-generation speaker list. No audio files were changed.'
+
+    $appRecordCount = @($savedBefore.records).Count
+    $appHasReference = [bool]$savedBefore.standard_reference
+    $appHasSpeaker = (@($speakers.speakers) -contains $char)
+    Write-Phase2Log (
+        'Live-app audit: saved_records=' + [string]$appRecordCount +
+        ' / standard_reference=' + [string]$appHasReference +
+        ' / speaker_visible=' + [string]$appHasSpeaker
+    )
+
+    if ($appRecordCount -le 0) {
+        throw 'The official Yun Jin files exist, but the running AI voice tool cannot see the saved Yun Jin audio. The app and migration root disagree. No audio files were changed.'
     }
-    Write-Phase2Log 'Preflight: live app and Yun Jin reference are available.'
+    if (-not $appHasReference) {
+        throw 'The official Yun Jin 120-second reference exists, but the running AI voice tool does not recognize it. The app and migration root disagree. No audio files were changed.'
+    }
+    if (-not $appHasSpeaker) {
+        throw 'The running AI voice tool sees the Yun Jin reference data but does not expose Yun Jin for generation. No audio files were changed.'
+    }
+    Write-Phase2Log 'Preflight: production files, saved-audio view, and Yun Jin generation reference agree.'
 
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     $moduleText = (Invoke-WebRequest -UseBasicParsing -Uri $moduleUrl -TimeoutSec 30).Content
