@@ -16,7 +16,9 @@ EXPECTED_CHARACTER = "パイモン"
 EXPECTED_WAV_COUNT = 84
 EXPECTED_STANDARD_REF_COUNT = 23
 EXPECTED_EMOTION_CACHE_COUNT = 84
-EXPECTED_EMOTION_REFS = {"angry.json": 11, "cheerful.json": 14, "gentle.json": 8, "surprised.json": 14, "worried.json": 11}\nEXPECTED_COMPARISON_REF_COUNT = 14\nEXPECTED_TOOL_PLAN_DISTINCT_WAVS = 37
+EXPECTED_EMOTION_REFS = {"angry.json": 11, "cheerful.json": 14, "gentle.json": 8, "surprised.json": 14, "worried.json": 11}
+EXPECTED_COMPARISON_REF_COUNT = 14
+EXPECTED_TOOL_PLAN_DISTINCT_WAVS = 37
 
 
 def hash_file(path: Path) -> str:
