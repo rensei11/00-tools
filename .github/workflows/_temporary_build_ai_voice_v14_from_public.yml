@@ -1,0 +1,50 @@
+name: Temporary Build AI Voice v14 From Public
+
+on:
+  push:
+    branches:
+      - chatgpt/ai-voice-v14-release-fix
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chatgpt/ai-voice-v14-release-fix
+          fetch-depth: 0
+      - name: Build v14 manifest from public v13 plus WuWa hotfix
+        shell: python
+        run: |
+          import hashlib, json
+          from pathlib import Path
+
+          base_path = Path('ai-voice/releases/2026-10-02-v13.json')
+          hotfix_path = Path('ai-voice/releases/2026-10-02-v13-wuwa-npc-hotfix.json')
+          base = json.loads(base_path.read_text(encoding='utf-8-sig'))
+          hotfix = json.loads(hotfix_path.read_text(encoding='utf-8-sig'))
+
+          base['files'].update(hotfix['files'])
+          old = 'APP_VERSION = "2026-10-02-v13"'
+          new = 'APP_VERSION = "2026-10-07-v14"'
+          app = base['files']['app.py']
+          if old not in app:
+              raise SystemExit('Expected v13 APP_VERSION marker not found in public manifest')
+          base['files']['app.py'] = app.replace(old, new, 1)
+          base['version'] = '2026-10-07-v14'
+
+          data = (json.dumps(base, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+          out = Path('ai-voice/releases/2026-10-07-v14.json')
+          out.write_bytes(data)
+          Path('ai-voice/releases/2026-10-07-v14.sha256').write_text(hashlib.sha256(data).hexdigest() + '\n', encoding='ascii')
+      - name: Commit v14 manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ai-voice/releases/2026-10-07-v14.json ai-voice/releases/2026-10-07-v14.sha256
+          git commit -m "Publish AI voice 2026-10-07-v14 manifest"
+          git push origin HEAD:chatgpt/ai-voice-v14-release-fix
