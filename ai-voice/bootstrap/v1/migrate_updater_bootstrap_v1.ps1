@@ -489,6 +489,93 @@ function Start-CurrentApp {
     }
 }
 
+function Write-PersistentCodeSnapshot {
+    # Save a durable, SHA-256-verified code snapshot BEFORE any live update.
+    # The history format is understood by the standalone recovery tool (v3).
+    $parentHistory = Join-Path $toolDir '_code_history'
+    $history = Join-Path $parentHistory '復元履歴'
+    foreach ($folder in @($parentHistory, $history)) {
+        if (Test-Path -LiteralPath $folder) {
+            $item = Get-Item -LiteralPath $folder -Force
+            if (-not $item.PSIsContainer -or
+                ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw ('Invalid code recovery history directory: ' + $folder)
+            }
+        }
+    }
+    $point = Join-Path $history (
+        '保存_' + [DateTime]::Now.ToString('yyyyMMdd_HHmmss_fff') +
+        '_' + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+    )
+    [IO.Directory]::CreateDirectory($point) | Out-Null
+    $manifest = @{
+        format = 'rensei-ai-voice-recovery-v3'
+        created = [DateTime]::Now.ToString('yyyy-MM-ddTHH:mm:ss.ffffff')
+        label = '正式更新の直前'
+        files = @{}
+    }
+    $folders = @('', 'clean_rebuild', 'sources', 'tools', 'tests', 'minimal_chatgpt_extension')
+    $suffixes = @('.py', '.cmd', '.bat', '.ps1', '.js', '.html', '.css', '.sh')
+    $ownFiles = @(
+        'AI音声ツール_安全更新と復元.py',
+        'AI音声ツール_安全更新と復元.cmd',
+        'AI音声ツール_保存と復元.py',
+        'AI音声ツール_保存と復元.cmd',
+        'AI音声ツール_元に戻す.cmd',
+        'ai_voice_recovery.py',
+        'AI_Voice_Restore.cmd'
+    )
+    $hasMain = $false
+    foreach ($dir in $folders) {
+        if ($dir -eq '') { $sourceDir = $toolDir }
+        else { $sourceDir = Join-Path $toolDir $dir }
+        if (-not (Test-Path -LiteralPath $sourceDir)) { continue }
+        $sourceInfo = Get-Item -LiteralPath $sourceDir -Force
+        if (-not $sourceInfo.PSIsContainer -or
+            ($sourceInfo.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+            throw ('Unsafe code directory: ' + $sourceDir)
+        }
+        foreach ($file in @(Get-ChildItem -LiteralPath $sourceDir -File -Force -ErrorAction Stop)) {
+            if ($ownFiles -contains $file.Name) { continue }
+            $relative = if ($dir -eq '') { $file.Name } else { $dir + '/' + $file.Name }
+            $extension = [IO.Path]::GetExtension($file.Name).ToLowerInvariant()
+            if ($suffixes -notcontains $extension -and
+                $relative -ne 'minimal_chatgpt_extension/manifest.json') { continue }
+            if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw ('Linked code file rejected: ' + $relative)
+            }
+            $bytes = [IO.File]::ReadAllBytes($file.FullName)
+            $target = Join-Path $point ($relative.Replace('/', '\'))
+            [IO.Directory]::CreateDirectory((Split-Path -Parent $target)) | Out-Null
+            [IO.File]::WriteAllBytes($target, $bytes)
+            $sha = [Security.Cryptography.SHA256]::Create()
+            try {
+                $digest = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '').ToLowerInvariant()
+                foreach ($readBack in @($target, $file.FullName)) {
+                    $actual = [BitConverter]::ToString(
+                        $sha.ComputeHash([IO.File]::ReadAllBytes($readBack))
+                    ).Replace('-', '').ToLowerInvariant()
+                    if ($actual -ne $digest) {
+                        throw ('Code changed during recovery snapshot: ' + $relative)
+                    }
+                }
+            } finally { $sha.Dispose() }
+            $manifest.files[$relative] = @{
+                bytes = $bytes.Length
+                sha256 = $digest
+            }
+            if ($relative -eq 'app.py') { $hasMain = $true }
+        }
+    }
+    if (-not $hasMain) { throw 'Cannot update without a recoverable app.py.' }
+    $json = ConvertTo-Json -InputObject $manifest -Depth 8
+    $pending = Join-Path $point 'manifest.pending'
+    [IO.File]::WriteAllText($pending, $json, (New-Object Text.UTF8Encoding($false)))
+    [IO.File]::Move($pending, (Join-Path $point 'manifest.json'))
+    Write-Log ('PERSISTENT_RECOVERY_POINT=' + $point + ' FILES=' + $manifest.files.Count)
+    return $point
+}
+
 function Apply-Manifest {
     param(
         [object]$Index,
@@ -540,6 +627,8 @@ function Apply-Manifest {
             [System.IO.File]::WriteAllText($staged, $entry.Content, $encoding)
         }
 
+        # No replacement and no service interruption without durable history.
+        $recoveryPoint = Write-PersistentCodeSnapshot
         if (Test-AppReady) {
             Stop-App
             Start-Sleep -Milliseconds 500
