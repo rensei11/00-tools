@@ -495,6 +495,13 @@ function Apply-Manifest {
         [object]$Payload
     )
 
+    $installedVersion = Get-LocalVersion
+    if (Test-RemoteVersionIsNewer -LocalVersion ([string]$Index.version) -RemoteVersion $installedVersion) {
+        Write-Log ('REFUSED_DOWNGRADE installed=' + $installedVersion + ' published=' + [string]$Index.version)
+        Set-Status 'FAILED_BEFORE_APPLY'
+        throw ('Refused installing an older release. installed=' + $installedVersion + ' published=' + [string]$Index.version)
+    }
+
     $workDir = Join-Path $workRoot ([Guid]::NewGuid().ToString('N'))
     $stageDir = Join-Path $workDir 'stage'
     $backupDir = Join-Path $workDir 'backup'
@@ -662,7 +669,7 @@ try {
 
     if ($null -ne $index) {
         $remoteVersion = [string]$index.version
-        if ($ForceUpdate -or (Test-RemoteVersionIsNewer $localVersion $remoteVersion)) {
+        if (Test-RemoteVersionIsNewer $localVersion $remoteVersion) {
             [System.IO.Directory]::CreateDirectory($workRoot) | Out-Null
             $manifestPath = Join-Path $workRoot ('manifest-' + [Guid]::NewGuid().ToString('N') + '.json')
             try {
@@ -683,6 +690,12 @@ try {
     catch {
         $localStartError = $_.Exception.Message
         Write-Log ('LOCAL_START_ERROR ' + $localStartError)
+
+        if ($null -ne $index -and (Test-RemoteVersionIsNewer -LocalVersion ([string]$index.version) -RemoteVersion $localVersion)) {
+            Write-Log ('REFUSED_OLDER_SELF_REPAIR local=' + $localVersion + ' published=' + [string]$index.version)
+            Set-Status 'START_FAILED'
+            throw ('Refused older self-repair. local=' + $localVersion + ' published=' + [string]$index.version + ' / ' + $localStartError)
+        }
 
         if ($null -eq $index) {
             throw ('Local startup failed and update index could not be loaded. ' + $localStartError + ' / ' + $indexError)
