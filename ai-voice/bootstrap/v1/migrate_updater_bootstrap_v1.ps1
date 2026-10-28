@@ -4,17 +4,21 @@
     [switch]$NoBrowser,
     [switch]$NoLaunch,
     [string]$IndexPath = '',
-    [string]$ToolRoot = 'D:\AI生成ファイル\Irodori-TTS\Fandom音声ツール'
+    [string]$ToolRoot = ''
 )
 
 $ErrorActionPreference = 'Stop'
-
-$toolDir = [System.IO.Path]::GetFullPath($ToolRoot)
 
 $publicUpdaterUrl = 'https://raw.githubusercontent.com/rensei11/00-tools/main/ai-voice/bootstrap/v1/migrate_updater_bootstrap_v1.ps1'
 
 $scriptName = [System.IO.Path]::GetFileName([string]$PSCommandPath)
 $isInstalledBootstrap = $scriptName -ieq 'updater_bootstrap.ps1'
+$defaultToolRoot = 'D:\AI生成ファイル\Irodori-TTS\Fandom音声ツール'
+$resolvedToolRoot = $ToolRoot
+if ([string]::IsNullOrWhiteSpace($resolvedToolRoot)) {
+    $resolvedToolRoot = if ($isInstalledBootstrap) { $PSScriptRoot } else { $defaultToolRoot }
+}
+$toolDir = [System.IO.Path]::GetFullPath($resolvedToolRoot)
 
 if (-not $isInstalledBootstrap -and -not $RepairButton -and -not $ForceUpdate -and -not $NoLaunch -and [string]::IsNullOrWhiteSpace($IndexPath)) {
     $RepairButton = $true
@@ -487,13 +491,40 @@ function Start-CurrentApp {
         $arguments += '-NoBrowser'
     }
 
-    $launcherOutput = @(& powershell.exe @arguments 2>&1)
-    $launcherExit = $LASTEXITCODE
-    foreach ($line in $launcherOutput) {
-        if (-not [string]::IsNullOrWhiteSpace([string]$line)) {
-            Write-Log ('LAUNCHER_OUTPUT ' + [string]$line)
-        }
+    $argumentText = '-NoProfile -ExecutionPolicy Bypass -File "' +
+        $launcher.Replace('"', '""') + '" -SkipUpdateCheck'
+    if ($SuppressBrowser) {
+        $argumentText += ' -NoBrowser'
     }
+
+    $startInfo = New-Object System.Diagnostics.ProcessStartInfo
+    $startInfo.FileName = 'powershell.exe'
+    $startInfo.Arguments = $argumentText
+    $startInfo.UseShellExecute = $false
+    $startInfo.CreateNoWindow = $true
+
+    $launcherProcess = New-Object System.Diagnostics.Process
+    $launcherProcess.StartInfo = $startInfo
+    if (-not $launcherProcess.Start()) {
+        $launcherProcess.Dispose()
+        throw 'Local launcher process could not be started.'
+    }
+
+    $launcherTimeoutMs = 150000
+    if (-not $launcherProcess.WaitForExit($launcherTimeoutMs)) {
+        $launcherPid = $launcherProcess.Id
+        Write-Log ('LAUNCHER_TIMEOUT after_ms=' + $launcherTimeoutMs + ' pid=' + $launcherPid)
+        try {
+            & taskkill.exe /PID $launcherPid /T /F | Out-Null
+        } catch {
+            try { $launcherProcess.Kill() } catch {}
+        }
+        $launcherProcess.Dispose()
+        throw 'Local launcher timed out after 150 seconds.'
+    }
+
+    $launcherExit = $launcherProcess.ExitCode
+    $launcherProcess.Dispose()
     Write-Log ('LAUNCHER_EXIT=' + $launcherExit)
 
     if ($launcherExit -ne 0) {
