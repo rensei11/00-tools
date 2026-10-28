@@ -13,7 +13,10 @@ $toolDir = [System.IO.Path]::GetFullPath($ToolRoot)
 
 $publicUpdaterUrl = 'https://raw.githubusercontent.com/rensei11/00-tools/main/ai-voice/bootstrap/v1/migrate_updater_bootstrap_v1.ps1'
 
-if (-not $RepairButton -and -not $ForceUpdate -and -not $NoLaunch -and [string]::IsNullOrWhiteSpace($IndexPath)) {
+$scriptName = [System.IO.Path]::GetFileName([string]$PSCommandPath)
+$isInstalledBootstrap = $scriptName -ieq 'updater_bootstrap.ps1'
+
+if (-not $isInstalledBootstrap -and -not $RepairButton -and -not $ForceUpdate -and -not $NoLaunch -and [string]::IsNullOrWhiteSpace($IndexPath)) {
     $RepairButton = $true
 }
 
@@ -160,14 +163,22 @@ function Convert-ToolVersion {
     if ([string]::IsNullOrWhiteSpace($Value)) {
         return $null
     }
-    if ($Value -notmatch '^([0-9]{4})-([0-9]{2})-([0-9]{2})-v([0-9]+)$') {
-        return $null
+
+    if ($Value -match '^v([0-9]+)\.([0-9]+)$') {
+        return [pscustomobject]@{
+            Major = [int]$Matches[1]
+            Minor = [int]$Matches[2]
+        }
     }
 
-    return [pscustomobject]@{
-        DateKey = [int]("$($Matches[1])$($Matches[2])$($Matches[3])")
-        Revision = [int]$Matches[4]
+    if ($Value -match '^([0-9]{4})-([0-9]{2})-([0-9]{2})-v([0-9]+)$') {
+        return [pscustomobject]@{
+            Major = 2
+            Minor = [int]$Matches[4]
+        }
     }
+
+    return $null
 }
 
 function Test-RemoteVersionIsNewer {
@@ -181,13 +192,14 @@ function Test-RemoteVersionIsNewer {
     if ($null -eq $local -or $null -eq $remote) {
         return $false
     }
-    if ($remote.DateKey -gt $local.DateKey) {
+
+    if ($remote.Major -gt $local.Major) {
         return $true
     }
-    if ($remote.DateKey -lt $local.DateKey) {
+    if ($remote.Major -lt $local.Major) {
         return $false
     }
-    return ($remote.Revision -gt $local.Revision)
+    return ($remote.Minor -gt $local.Minor)
 }
 
 function Get-LocalVersion {
@@ -199,7 +211,7 @@ function Get-LocalVersion {
     $line = Get-Content -LiteralPath $appPath -ErrorAction SilentlyContinue |
         Where-Object { $_ -match '^APP_VERSION\s*=' } |
         Select-Object -First 1
-    if ($line -and $line -match '([0-9]{4}-[0-9]{2}-[0-9]{2}-v[0-9]+)') {
+    if ($line -and $line -match '(v[0-9]+\.[0-9]+|[0-9]{4}-[0-9]{2}-[0-9]{2}-v[0-9]+)') {
         return [string]$Matches[1]
     }
     return ''
@@ -652,8 +664,49 @@ function Apply-Manifest {
     }
 }
 
+function Install-StableBootstrapFromSelf {
+    if (-not $ForceUpdate -or $isInstalledBootstrap) {
+        return
+    }
+    if ([string]::IsNullOrWhiteSpace([string]$PSCommandPath) -or
+        -not (Test-Path -LiteralPath $PSCommandPath -PathType Leaf)) {
+        throw 'Public updater script path could not be resolved.'
+    }
+
+    $destination = Join-Path $toolDir 'updater_bootstrap.ps1'
+    $backupRoot = Join-Path $toolDir '_updater_bootstrap_backup'
+    [System.IO.Directory]::CreateDirectory($backupRoot) | Out-Null
+
+    if (Test-Path -LiteralPath $destination -PathType Leaf) {
+        $stamp = Get-Date -Format 'yyyyMMdd_HHmmss_fff'
+        Copy-Item -LiteralPath $destination -Destination (Join-Path $backupRoot ('before-v2-version-fix-' + $stamp + '.ps1')) -Force
+    }
+
+    $sourceText = [System.IO.File]::ReadAllText($PSCommandPath, [System.Text.Encoding]::UTF8).TrimStart([char]0xFEFF)
+    $temp = $destination + '.version-fix-pending'
+    $encoding = New-Object System.Text.UTF8Encoding($true)
+    [System.IO.File]::WriteAllText($temp, $sourceText, $encoding)
+
+    $tokens = $null
+    $errors = $null
+    [void][System.Management.Automation.Language.Parser]::ParseFile(
+        $temp,
+        [ref]$tokens,
+        [ref]$errors
+    )
+    if (@($errors).Count -ne 0) {
+        Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+        throw ('Repaired updater bootstrap parse failed: ' + $errors[0].Message)
+    }
+
+    Copy-Item -LiteralPath $temp -Destination $destination -Force
+    Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+    Write-Log 'STABLE_BOOTSTRAP_REPAIRED=v2-version-format'
+}
+
 try {
     [System.IO.File]::WriteAllText($logPath, '', (New-Object System.Text.UTF8Encoding($false)))
+    Install-StableBootstrapFromSelf
     Set-Status 'CHECKING'
 
     $index = $null
