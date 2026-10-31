@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "version": "v2.28",
-  "manifest_url": "https://raw.githubusercontent.com/rensei11/00-tools/5529aa9e0c82a8b7b097d612f35a17929896e9e4/ai-voice/releases/2026-10-31-v2.28.json",
-  "manifest_sha256": "4e58845f03131999ef1fe24db9eeb68b01d3c215f664302fd8962dde5bde4d36"
+  "version": "v2.29",
+  "manifest_url": "https://raw.githubusercontent.com/rensei11/00-tools/2a4606c9a6b1b2f86cab51be5ec9a5cc7f519e64/ai-voice/releases/2026-10-31-v2.29.json",
+  "manifest_sha256": "c82bd1a31d93b54a4e13eea68beef9a884e4cfa9e7d568e1cf8c3208e6d868dd"
 }
