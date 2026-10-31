@@ -393,7 +393,7 @@ function Test-AppReady {
 }
 
 function Stop-App {
-    & wsl.exe -d Ubuntu -- bash -lc "pkill -f '/home/rensei/Irodori-TTS/.venv/bin/python [a]pp.py' || true" | Out-Null  # storage-policy: external-read
+    & wsl.exe -d Ubuntu -- bash -lc "pkill -f '/home/rensei/Irodori-TTS/.venv/bin/python .*[a]pp.py' || true" | Out-Null  # storage-policy: external-read
 
     for ($attempt = 0; $attempt -lt 20; $attempt++) {
         if (-not (Test-AppReady)) {
@@ -402,7 +402,7 @@ function Stop-App {
         Start-Sleep -Milliseconds 250
     }
 
-    throw 'Local app did not stop before update.'
+    throw 'Port 7862 is still served by an old or different app; update was not applied.'
 }
 
 function Test-StartupLogHandleReleased {
@@ -650,6 +650,12 @@ function Apply-Manifest {
                     )
                     throw
                 }
+            }
+
+            $stagedHash = Get-Sha256 $staged
+            $destinationHash = Get-Sha256 $destination
+            if ($stagedHash -ne $destinationHash) {
+                throw ('Applied file hash mismatch: ' + $relative)
             }
         }
 
