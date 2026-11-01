@@ -81,6 +81,9 @@ exit 0
     if (-not $finalLog.Contains('LAUNCHER_EXIT=0')) {
         throw 'Launcher success must be recorded before draining descendant pipes.'
     }
+    if (-not $finalLog.Contains('LAUNCHER_OUTPUT_INCOMPLETE')) {
+        throw 'The test did not reproduce a descendant holding the output pipe open.'
+    }
     Write-Host 'VOICE_LAUNCHER_CAPTURE=PASS'
 }
 finally {
