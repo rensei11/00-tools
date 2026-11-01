@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 from pathlib import Path
 
 root = Path(__file__).resolve().parents[1]
-manifest_path = root / "ai-voice/releases/2026-11-02-v2.31.json"
-legacy_path = root / "fandom-voice-tool-latest.json"
-manifest_bytes = manifest_path.read_bytes()
-legacy_bytes = legacy_path.read_bytes()
+def repository_blob(path: str) -> bytes:
+    # On Windows Git may turn the checked-out JSON newlines into CRLF.
+    # The updater downloads commit-pinned Git blob bytes, not checkout bytes.
+    return subprocess.check_output(["git", "show", "HEAD:" + path], cwd=root)
+
+
+manifest_bytes = repository_blob("ai-voice/releases/2026-11-02-v2.31.json")
+legacy_bytes = repository_blob("fandom-voice-tool-latest.json")
 expected_sha = "6c5516dac16135be5caeb3fad7d1138201d4e999722d0af27458df4821da3b44"
 assert hashlib.sha256(manifest_bytes).hexdigest() == expected_sha
 assert manifest_bytes == legacy_bytes
