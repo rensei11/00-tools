@@ -16,13 +16,15 @@ $tokens = $null
 $errors = $null
 $ast = [Management.Automation.Language.Parser]::ParseFile($updater, [ref]$tokens, [ref]$errors)
 if ($errors.Count) { throw ('Updater parse error: ' + $errors[0].Message) }
-$fn = @($ast.FindAll({
-    param($node)
-    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
-    $node.Name -eq 'Start-CurrentApp'
-}, $true))
-if ($fn.Count -ne 1) { throw 'Start-CurrentApp function not found.' }
-Invoke-Expression $fn[0].Extent.Text
+foreach ($name in @('Write-Log', 'Start-CurrentApp')) {
+    $fn = @($ast.FindAll({
+        param($node)
+        $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq $name
+    }, $true))
+    if ($fn.Count -ne 1) { throw ('Function missing: ' + $name) }
+    Invoke-Expression $fn[0].Extent.Text
+}
 $toolDir = Join-Path $env:RUNNER_TEMP ('voice-update-launcher-' + [Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($toolDir) | Out-Null
 $logPath = Join-Path $toolDir '_update_bootstrap_log.txt'
