@@ -603,10 +603,33 @@ function Start-CurrentApp {
     }
 
     $launcherExit = $launcherProcess.ExitCode
-    $launcherStdout = $stdoutTask.GetAwaiter().GetResult()
-    $launcherStderr = $stderrTask.GetAwaiter().GetResult()
-    $launcherProcess.Dispose()
+    # The direct launcher exited; its descendants may still hold inherited pipe
+    # handles open (e.g. wsl.exe). Never wait indefinitely for pipe EOF.
     Write-Log ('LAUNCHER_EXIT=' + $launcherExit)
+    $drainTimeoutMs = 3000
+    $drained = $false
+    try {
+        $drained = [System.Threading.Tasks.Task]::WaitAll(
+            [System.Threading.Tasks.Task[]]@($stdoutTask, $stderrTask),
+            $drainTimeoutMs
+        )
+    } catch {
+        Write-Log ('LAUNCHER_OUTPUT_WAIT_ERROR ' + $_.Exception.Message)
+    }
+
+    $launcherStdout = ''
+    $launcherStderr = ''
+    if ($stdoutTask.Status -eq [System.Threading.Tasks.TaskStatus]::RanToCompletion) {
+        $launcherStdout = [string]$stdoutTask.GetAwaiter().GetResult()
+    }
+    if ($stderrTask.Status -eq [System.Threading.Tasks.TaskStatus]::RanToCompletion) {
+        $launcherStderr = [string]$stderrTask.GetAwaiter().GetResult()
+    }
+    if (-not $drained) {
+        Write-Log ('LAUNCHER_OUTPUT_INCOMPLETE stdout=' + $stdoutTask.Status +
+            ' stderr=' + $stderrTask.Status + ' after_ms=' + $drainTimeoutMs)
+    }
+    $launcherProcess.Dispose()
 
     if ($launcherExit -ne 0) {
         foreach ($stream in @(
