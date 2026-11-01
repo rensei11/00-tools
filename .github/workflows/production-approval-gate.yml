@@ -25,6 +25,10 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Verify failed launcher output is preserved on Windows PowerShell 5.1
+        shell: powershell
+        run: .\tests\test_voice_update_launcher_capture.ps1
+
       - name: Validate public updater repair
         shell: powershell
         run: |
