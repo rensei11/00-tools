@@ -19,8 +19,9 @@ if ([string]::IsNullOrWhiteSpace($resolvedToolRoot)) {
     $resolvedToolRoot = if ($isInstalledBootstrap) { $PSScriptRoot } else { $defaultToolRoot }
 }
 $toolDir = [System.IO.Path]::GetFullPath($resolvedToolRoot)
+$publicUpdaterRunner = Join-Path $toolDir '_update_bootstrap_latest.ps1'
 
-if (-not $isInstalledBootstrap -and -not $RepairButton -and -not $ForceUpdate -and -not $NoLaunch -and [string]::IsNullOrWhiteSpace($IndexPath)) {
+if (-not $isInstalledBootstrap -and -not $RepairButton -and -not $ForceUpdate -and -not $NoLaunch -and [string]::IsNullOrWhiteSpace($IndexPath) -and [string]::IsNullOrWhiteSpace($ToolRoot)) {
     $RepairButton = $true
 }
 
@@ -159,6 +160,77 @@ function Write-Log {
         ([DateTime]::Now.ToString('s') + ' ' + $Line + [Environment]::NewLine),
         (New-Object System.Text.UTF8Encoding($false))
     )
+}
+
+function Invoke-LatestPublicUpdater {
+    if (-not $isInstalledBootstrap -or -not [string]::IsNullOrWhiteSpace($IndexPath)) {
+        return $null
+    }
+
+    $headers = @{
+        'User-Agent' = 'Rensei-AI-Voice-Bootstrap'
+        'Cache-Control' = 'no-cache'
+        'Pragma' = 'no-cache'
+    }
+
+    try {
+        Remove-Item -LiteralPath $publicUpdaterRunner -Force -ErrorAction SilentlyContinue
+        Invoke-WebRequest -Uri $publicUpdaterUrl -OutFile $publicUpdaterRunner -UseBasicParsing -Headers $headers -TimeoutSec 30
+
+        $tokens = $null
+        $errors = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile(
+            $publicUpdaterRunner,
+            [ref]$tokens,
+            [ref]$errors
+        )
+        if (@($errors).Count -ne 0) {
+            throw ('Downloaded updater parse failed: ' + $errors[0].Message)
+        }
+
+        $text = [System.IO.File]::ReadAllText($publicUpdaterRunner, [System.Text.Encoding]::UTF8)
+        foreach ($required in @(
+            '[switch]$ForceUpdate',
+            '[string]$ToolRoot',
+            'api.github.com/repos/rensei11/00-tools/contents/ai-voice/update-index.json?ref=main',
+            'FAILED_ROLLED_BACK'
+        )) {
+            if ($text.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
+                throw ('Downloaded updater is missing required contract: ' + $required)
+            }
+        }
+
+        $arguments = @(
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-File',
+            $publicUpdaterRunner,
+            '-ToolRoot',
+            $toolDir
+        )
+        if ($ForceUpdate) {
+            $arguments += '-ForceUpdate'
+        }
+        if ($NoBrowser) {
+            $arguments += '-NoBrowser'
+        }
+        if ($NoLaunch) {
+            $arguments += '-NoLaunch'
+        }
+
+        & powershell.exe @arguments | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+        Write-Log ('PUBLIC_UPDATER_EXIT=' + $exitCode)
+        return [int]$exitCode
+    }
+    catch {
+        Write-Log ('PUBLIC_UPDATER_REFRESH_ERROR ' + $_.Exception.Message)
+        return $null
+    }
+    finally {
+        Remove-Item -LiteralPath $publicUpdaterRunner -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Convert-ToolVersion {
@@ -743,6 +815,12 @@ function Install-StableBootstrapFromSelf {
 
 try {
     [System.IO.File]::WriteAllText($logPath, '', (New-Object System.Text.UTF8Encoding($false)))
+
+    $delegatedExit = Invoke-LatestPublicUpdater
+    if ($null -ne $delegatedExit) {
+        exit [int]$delegatedExit
+    }
+
     Install-StableBootstrapFromSelf
     Set-Status 'CHECKING'
 
