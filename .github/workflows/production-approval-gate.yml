@@ -29,6 +29,10 @@ jobs:
         shell: powershell
         run: .\tests\test_voice_update_launcher_capture.ps1
 
+      - name: Verify v2.31 payload, pin hash and protected exclusions
+        shell: powershell
+        run: python tests/test_voice_release_v231.py
+
       - name: Validate public updater repair
         shell: powershell
         run: |
