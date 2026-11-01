@@ -386,6 +386,7 @@ function Download-Manifest {
     if ([string]$payload.version -ne [string]$Index.version) {
         throw 'Update index version does not match manifest version.'
     }
+    Write-Log ('MANIFEST_VERIFIED version=' + [string]$Index.version + ' sha256=' + $expectedHash)
     if ($null -eq $payload.files) {
         throw 'Manifest has no files.'
     }
@@ -574,6 +575,8 @@ function Start-CurrentApp {
     $startInfo.Arguments = $argumentText
     $startInfo.UseShellExecute = $false
     $startInfo.CreateNoWindow = $true
+    $startInfo.RedirectStandardOutput = $true
+    $startInfo.RedirectStandardError = $true
 
     $launcherProcess = New-Object System.Diagnostics.Process
     $launcherProcess.StartInfo = $startInfo
@@ -581,6 +584,10 @@ function Start-CurrentApp {
         $launcherProcess.Dispose()
         throw 'Local launcher process could not be started.'
     }
+
+    # Drain both pipes concurrently before waiting, so a failed launcher cannot deadlock.
+    $stdoutTask = $launcherProcess.StandardOutput.ReadToEndAsync()
+    $stderrTask = $launcherProcess.StandardError.ReadToEndAsync()
 
     $launcherTimeoutMs = 150000
     if (-not $launcherProcess.WaitForExit($launcherTimeoutMs)) {
@@ -596,10 +603,22 @@ function Start-CurrentApp {
     }
 
     $launcherExit = $launcherProcess.ExitCode
+    $launcherStdout = $stdoutTask.GetAwaiter().GetResult()
+    $launcherStderr = $stderrTask.GetAwaiter().GetResult()
     $launcherProcess.Dispose()
     Write-Log ('LAUNCHER_EXIT=' + $launcherExit)
 
     if ($launcherExit -ne 0) {
+        foreach ($stream in @(
+            @{ Name = 'STDOUT'; Text = $launcherStdout },
+            @{ Name = 'STDERR'; Text = $launcherStderr }
+        )) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$stream.Text)) {
+                $detail = ([string]$stream.Text).Trim().Replace("`r", '').Replace("`n", ' | ')
+                if ($detail.Length -gt 4096) { $detail = $detail.Substring(0, 4096) + ' [TRUNCATED]' }
+                Write-Log ('LAUNCHER_' + $stream.Name + ' ' + $detail)
+            }
+        }
         throw ('Local launcher failed with exit code ' + $launcherExit)
     }
 }
@@ -814,7 +833,8 @@ function Install-StableBootstrapFromSelf {
 }
 
 try {
-    [System.IO.File]::WriteAllText($logPath, '', (New-Object System.Text.UTF8Encoding($false)))
+    # Keep previous failed attempts, including their launcher errors, for diagnostics.
+    Write-Log ('ATTEMPT_BEGIN script=' + $scriptName + ' force=' + [string]$ForceUpdate + ' no_launch=' + [string]$NoLaunch)
 
     $delegatedExit = Invoke-LatestPublicUpdater
     if ($null -ne $delegatedExit) {
