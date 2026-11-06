@@ -665,6 +665,7 @@ function Apply-Manifest {
     $changed = New-Object 'System.Collections.Generic.List[string]'
     $created = New-Object 'System.Collections.Generic.List[string]'
     $applyStarted = $false
+    $preserveWorkDir = $false
 
     try {
         [System.IO.Directory]::CreateDirectory($stageDir) | Out-Null
@@ -803,6 +804,7 @@ function Apply-Manifest {
             }
             catch {
                 Write-Log ('ROLLBACK_ERROR ' + $_.Exception.Message)
+                $preserveWorkDir = $true
                 Set-Status 'FAILED_ROLLBACK_START'
             }
         } else {
@@ -811,7 +813,11 @@ function Apply-Manifest {
         throw
     }
     finally {
-        Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+        if ($preserveWorkDir) {
+            Write-Log ('ROLLBACK_BACKUP_PRESERVED path=' + $workDir)
+        } else {
+            Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
