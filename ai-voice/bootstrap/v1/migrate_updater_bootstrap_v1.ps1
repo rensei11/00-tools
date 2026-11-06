@@ -665,6 +665,7 @@ function Apply-Manifest {
     $changed = New-Object 'System.Collections.Generic.List[string]'
     $created = New-Object 'System.Collections.Generic.List[string]'
     $applyStarted = $false
+    $preserveWorkDir = $false
 
     try {
         [System.IO.Directory]::CreateDirectory($stageDir) | Out-Null
@@ -789,9 +790,10 @@ function Apply-Manifest {
                 foreach ($relative in $changed) {
                     $destination = Get-FullPath $toolDir $relative
                     $backup = Get-FullPath $backupDir $relative
-                    if (Test-Path -LiteralPath $backup -PathType Leaf) {
-                        Copy-Item -LiteralPath $backup -Destination $destination -Force
+                    if (-not (Test-Path -LiteralPath $backup -PathType Leaf)) {
+                        throw ('Rollback backup is missing: ' + $relative)
                     }
+                    Copy-Item -LiteralPath $backup -Destination $destination -Force
                 }
                 foreach ($relative in $created) {
                     $destination = Get-FullPath $toolDir $relative
@@ -803,6 +805,7 @@ function Apply-Manifest {
             }
             catch {
                 Write-Log ('ROLLBACK_ERROR ' + $_.Exception.Message)
+                $preserveWorkDir = $true
                 Set-Status 'FAILED_ROLLBACK_START'
             }
         } else {
@@ -811,7 +814,11 @@ function Apply-Manifest {
         throw
     }
     finally {
-        Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+        if ($preserveWorkDir) {
+            Write-Log ('ROLLBACK_BACKUP_PRESERVED path=' + $workDir)
+        } else {
+            Remove-Item -LiteralPath $workDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
