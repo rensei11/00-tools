@@ -790,9 +790,10 @@ function Apply-Manifest {
                 foreach ($relative in $changed) {
                     $destination = Get-FullPath $toolDir $relative
                     $backup = Get-FullPath $backupDir $relative
-                    if (Test-Path -LiteralPath $backup -PathType Leaf) {
-                        Copy-Item -LiteralPath $backup -Destination $destination -Force
+                    if (-not (Test-Path -LiteralPath $backup -PathType Leaf)) {
+                        throw ('Rollback backup is missing: ' + $relative)
                     }
+                    Copy-Item -LiteralPath $backup -Destination $destination -Force
                 }
                 foreach ($relative in $created) {
                     $destination = Get-FullPath $toolDir $relative
