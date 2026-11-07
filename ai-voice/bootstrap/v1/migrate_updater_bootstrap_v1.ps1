@@ -3,6 +3,7 @@
     [switch]$ForceUpdate,
     [switch]$NoBrowser,
     [switch]$NoLaunch,
+    [switch]$RestoreArchivedVersion,
     [string]$IndexPath = '',
     [string]$ToolRoot = ''
 )
@@ -122,6 +123,8 @@ $appUrl = 'http://127.0.0.1:7862/'
 $logPath = Join-Path $toolDir '_update_bootstrap_log.txt'
 $statusPath = Join-Path $toolDir '_update_status.txt'
 $workRoot = Join-Path $toolDir '_update_bootstrap_work'
+$archiveRoot = Join-Path (Join-Path $toolDir '_backup') 'ai_voice_version_archive'
+$versionPinPath = Join-Path $archiveRoot 'pinned-version.txt'
 $stableShellFiles = @(
     'Start Fandom Tool.cmd',
     'start_fandom_tool.cmd',
@@ -336,6 +339,12 @@ function Resolve-ManifestSource {
         }
         $indexDir = Split-Path -Parent ([System.IO.Path]::GetFullPath($IndexPath))
         $manifestPath = [System.IO.Path]::GetFullPath((Join-Path $indexDir ([string]$Index.manifest_path)))
+        if ($RestoreArchivedVersion) {
+            $allowedManifestDir = [System.IO.Path]::GetFullPath((Join-Path $archiveRoot 'manifests')).TrimEnd('\') + '\'
+            if (-not $manifestPath.StartsWith($allowedManifestDir, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw 'Archived restore manifest is outside the protected archive.'
+            }
+        }
         return [pscustomobject]@{
             Mode = 'file'
             Source = $manifestPath
@@ -414,6 +423,9 @@ function Get-SafeRelativePath {
         if ($protectedDirectories -contains $part) {
             throw ('Protected directory rejected: ' + $Name)
         }
+        if ($part -ieq 'shared_results') {
+            return $null
+        }
     }
 
     if ($stableShellFiles -contains $parts[-1]) {
@@ -421,6 +433,9 @@ function Get-SafeRelativePath {
     }
     if ($protectedFiles -contains $parts[-1]) {
         throw ('Protected file rejected: ' + $Name)
+    }
+    if ($parts[-1] -ieq 'hermes_task.json') {
+        return $null
     }
 
     $extension = [System.IO.Path]::GetExtension($parts[-1]).ToLowerInvariant()
@@ -454,6 +469,60 @@ function Get-FullPath {
         }
     }
     return $full
+}
+
+function Ensure-VersionArchiveControls {
+    $controls = @(
+        @{ Name = 'version_archive_manager.py'; Contract = 'def download_all' },
+        @{ Name = 'Voice-Version-Archive.cmd'; Contract = 'version_archive_manager.py' }
+    )
+    $baseUrl = 'https://raw.githubusercontent.com/rensei11/00-tools/main/ai-voice/bootstrap/v1/'
+    foreach ($control in $controls) {
+        $destination = Join-Path $toolDir ([string]$control.Name)
+        if (-not (Test-Path -LiteralPath $destination -PathType Leaf)) {
+            $temp = $destination + '.archive-download-pending'
+            try {
+                Invoke-WebRequest -Uri ($baseUrl + [string]$control.Name) -OutFile $temp -UseBasicParsing -TimeoutSec 45
+                $bytes = [System.IO.File]::ReadAllBytes($temp)
+                if ($bytes.Length -lt 50 -or $bytes.Length -gt 100000) {
+                    throw ('Unexpected archive control size: ' + [string]$control.Name)
+                }
+                if ([string]$control.Name -like '*.cmd') {
+                    foreach ($b in $bytes) {
+                        if ($b -gt 127) { throw 'Archive control batch file is not ASCII.' }
+                    }
+                }
+                $body = [System.Text.Encoding]::UTF8.GetString($bytes)
+                if ($body.IndexOf([string]$control.Contract, [StringComparison]::Ordinal) -lt 0) {
+                    throw ('Archive control contract is missing: ' + [string]$control.Name)
+                }
+                [System.IO.File]::Move($temp, $destination)
+            } finally {
+                Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
+function Invoke-ArchiveAllVersions {
+    Ensure-VersionArchiveControls
+    $manager = Join-Path $toolDir 'version_archive_manager.py'
+    $pythonCommand = Get-Command 'py.exe' -ErrorAction SilentlyContinue
+    $pythonArgs = @('-3', $manager, 'archive', '--tool-root', $toolDir)
+    if (-not $pythonCommand) {
+        $pythonCommand = Get-Command 'python.exe' -ErrorAction SilentlyContinue
+        $pythonArgs = @($manager, 'archive', '--tool-root', $toolDir)
+    }
+    if (-not $pythonCommand) {
+        throw 'Windows Python was not found; safe archive is required before update.'
+    }
+    & ([string]$pythonCommand.Source) @pythonArgs 2>&1 | ForEach-Object { Write-Log ('ARCHIVE ' + [string]$_) }
+    if ($LASTEXITCODE -ne 0) {
+        throw ('Version archive failed with exit code ' + $LASTEXITCODE)
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $archiveRoot 'archive-complete.json') -PathType Leaf)) {
+        throw 'Version archive did not write its completion record.'
+    }
 }
 
 function Test-AppReady {
@@ -653,7 +722,7 @@ function Apply-Manifest {
     )
 
     $installedVersion = Get-LocalVersion
-    if (Test-RemoteVersionIsNewer -LocalVersion ([string]$Index.version) -RemoteVersion $installedVersion) {
+    if (-not $RestoreArchivedVersion -and (Test-RemoteVersionIsNewer -LocalVersion ([string]$Index.version) -RemoteVersion $installedVersion)) {
         Write-Log ('REFUSED_DOWNGRADE installed=' + $installedVersion + ' published=' + [string]$Index.version)
         Set-Status 'FAILED_BEFORE_APPLY'
         throw ('Refused installing an older release. installed=' + $installedVersion + ' published=' + [string]$Index.version)
@@ -664,6 +733,7 @@ function Apply-Manifest {
     $backupDir = Join-Path $workDir 'backup'
     $changed = New-Object 'System.Collections.Generic.List[string]'
     $created = New-Object 'System.Collections.Generic.List[string]'
+    $removals = New-Object 'System.Collections.Generic.List[string]'
     $applyStarted = $false
     $preserveWorkDir = $false
 
@@ -695,6 +765,17 @@ function Apply-Manifest {
             throw 'Manifest has no supported program files.'
         }
 
+        if ($RestoreArchivedVersion) {
+            foreach ($candidate in @($Index.remove_paths)) {
+                if ([string]::IsNullOrWhiteSpace([string]$candidate)) { continue }
+                $relative = Get-SafeRelativePath ([string]$candidate)
+                if (-not $relative -or -not $seen.Add($relative)) {
+                    throw ('Invalid duplicate archived removal path: ' + [string]$candidate)
+                }
+                $removals.Add($relative) | Out-Null
+            }
+        }
+
         foreach ($entry in $entries) {
             $staged = Get-FullPath $stageDir $entry.Relative
             [System.IO.Directory]::CreateDirectory((Split-Path -Parent $staged)) | Out-Null
@@ -705,6 +786,52 @@ function Apply-Manifest {
             [System.IO.File]::WriteAllText($staged, $entry.Content, $encoding)
         }
 
+        # Keep a permanent, verified copy of the installed code before every
+        # update/restore. This is separate from the temporary transaction undo.
+        foreach ($part in @((Join-Path $toolDir '_backup'), $archiveRoot)) {
+            if (Test-Path -LiteralPath $part) {
+                $item = Get-Item -LiteralPath $part -Force
+                if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw 'Permanent snapshot path is a reparse point.'
+                }
+            }
+        }
+        $snapshotDir = Join-Path (Join-Path $archiveRoot 'snapshots') ([DateTime]::Now.ToString('yyyyMMdd-HHmmss') + '-' + [Guid]::NewGuid().ToString('N'))
+        [System.IO.Directory]::CreateDirectory($snapshotDir) | Out-Null
+        $snapshotPresent = New-Object 'System.Collections.Generic.List[object]'
+        $snapshotAbsent = New-Object 'System.Collections.Generic.List[string]'
+        $snapshotSeen = New-Object 'System.Collections.Generic.HashSet[string]' ([System.StringComparer]::OrdinalIgnoreCase)
+        $snapshotCandidates = @($entries | ForEach-Object { $_.Relative }) + @($removals | ForEach-Object { [string]$_ })
+        foreach ($relative in $snapshotCandidates) {
+            if (-not $snapshotSeen.Add([string]$relative)) { continue }
+            $original = Get-FullPath $toolDir ([string]$relative)
+            if (Test-Path -LiteralPath $original -PathType Leaf) {
+                $originalItem = Get-Item -LiteralPath $original -Force
+                if (($originalItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw ('Reparse point in pre-update program: ' + $relative)
+                }
+                $copy = Get-FullPath (Join-Path $snapshotDir 'files') ([string]$relative)
+                [System.IO.Directory]::CreateDirectory((Split-Path -Parent $copy)) | Out-Null
+                Copy-Item -LiteralPath $original -Destination $copy
+                $hash = Get-Sha256 $original
+                if ((Get-Sha256 $copy) -ne $hash) {
+                    throw ('Permanent pre-update snapshot mismatch: ' + $relative)
+                }
+                $snapshotPresent.Add([pscustomobject]@{ name = [string]$relative; sha256 = $hash }) | Out-Null
+            } else {
+                $snapshotAbsent.Add([string]$relative) | Out-Null
+            }
+        }
+        $snapshotMeta = [pscustomobject]@{
+            original_version = $installedVersion
+            target_version = [string]$Index.version
+            present = @($snapshotPresent.ToArray())
+            absent = @($snapshotAbsent.ToArray())
+        }
+        [System.IO.File]::WriteAllText((Join-Path $snapshotDir 'snapshot.json'),
+            ($snapshotMeta | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+        Write-Log ('PRE_UPDATE_SNAPSHOT_VERIFIED path=' + $snapshotDir + ' files=' + $snapshotPresent.Count)
+
         if (Test-AppReady) {
             Stop-App
             Start-Sleep -Milliseconds 500
@@ -712,6 +839,25 @@ function Apply-Manifest {
 
         Set-Status 'APPLYING'
         $applyStarted = $true
+
+        foreach ($relative in $removals) {
+            $destination = Get-FullPath $toolDir $relative
+            if (Test-Path -LiteralPath $destination -PathType Leaf) {
+                $item = Get-Item -LiteralPath $destination -Force
+                if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                    throw ('Reparse point in removal path: ' + $relative)
+                }
+                $backup = Get-FullPath $backupDir $relative
+                [System.IO.Directory]::CreateDirectory((Split-Path -Parent $backup)) | Out-Null
+                Copy-Item -LiteralPath $destination -Destination $backup
+                if ((Get-Sha256 $backup) -ne (Get-Sha256 $destination)) {
+                    throw ('Removal backup verification failed: ' + $relative)
+                }
+                $changed.Add($relative) | Out-Null
+                Remove-Item -LiteralPath $destination -Force
+                Write-Log ('ARCHIVED_REMOVAL relative=' + $relative)
+            }
+        }
 
         foreach ($entry in $entries) {
             $relative = $entry.Relative
@@ -776,6 +922,12 @@ function Apply-Manifest {
 
         Set-Status 'RESTARTING'
         Start-CurrentApp -SuppressBrowser:$NoBrowser
+
+        if ($RestoreArchivedVersion) {
+            [System.IO.Directory]::CreateDirectory($archiveRoot) | Out-Null
+            [System.IO.File]::WriteAllText($versionPinPath, [string]$Index.version, [System.Text.Encoding]::ASCII)
+            Write-Log ('ARCHIVED_VERSION_PINNED version=' + [string]$Index.version)
+        }
 
         Write-Log ('SUCCESS version=' + [string]$Index.version + ' files=' + $entries.Count)
         Set-Status 'SUCCESS'
@@ -874,6 +1026,33 @@ try {
     Install-StableBootstrapFromSelf
     Set-Status 'CHECKING'
 
+    if ($RestoreArchivedVersion) {
+        if ([string]::IsNullOrWhiteSpace($IndexPath) -or $ForceUpdate -or $RepairButton) {
+            throw 'Archived restore needs a local index and cannot be combined with update or repair.'
+        }
+        [System.IO.Directory]::CreateDirectory($workRoot) | Out-Null
+        $index = Get-UpdateIndex
+        $manifestPath = Join-Path $workRoot ('restore-' + [Guid]::NewGuid().ToString('N') + '.json')
+        try {
+            $payload = Download-Manifest $index $manifestPath
+            Apply-Manifest $index $payload
+            exit 0
+        } finally {
+            Remove-Item -LiteralPath $manifestPath -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    if (Test-Path -LiteralPath $versionPinPath -PathType Leaf) {
+        $pinned = [System.IO.File]::ReadAllText($versionPinPath, [System.Text.Encoding]::ASCII).Trim()
+        if ($pinned -notmatch '^(v[0-9]+\.[0-9]+|[0-9]{4}-[0-9]{2}-[0-9]{2}-v[0-9]+)$') {
+            throw 'Archived version pin is invalid; refusing automatic updates.'
+        }
+        Write-Log ('SKIP_AUTO_UPDATE_PINNED version=' + $pinned)
+        Start-CurrentApp -SuppressBrowser:$NoBrowser
+        Set-Status 'PINNED_START_SUCCESS'
+        exit 0
+    }
+
     $index = $null
     $indexError = $null
     try {
@@ -888,6 +1067,14 @@ try {
     if ($null -ne $index) {
         $remoteVersion = [string]$index.version
         if (Test-RemoteVersionIsNewer $localVersion $remoteVersion) {
+            try {
+                Invoke-ArchiveAllVersions
+            } catch {
+                Write-Log ('UPDATE_BLOCKED_ARCHIVE_FAILED ' + $_.Exception.Message)
+                Set-Status 'UPDATE_BLOCKED_ARCHIVE_FAILED'
+                Start-CurrentApp -SuppressBrowser:$NoBrowser
+                exit 0
+            }
             [System.IO.Directory]::CreateDirectory($workRoot) | Out-Null
             $manifestPath = Join-Path $workRoot ('manifest-' + [Guid]::NewGuid().ToString('N') + '.json')
             try {
@@ -897,6 +1084,15 @@ try {
             } finally {
                 Remove-Item -LiteralPath $manifestPath -Force -ErrorAction SilentlyContinue
             }
+        }
+    }
+
+    if (-not (Test-Path -LiteralPath (Join-Path $archiveRoot 'archive-complete.json') -PathType Leaf)) {
+        try {
+            Invoke-ArchiveAllVersions
+        } catch {
+            Write-Log ('INITIAL_ARCHIVE_PENDING ' + $_.Exception.Message)
+            # Archival is retried on next launch; do not break the current app.
         }
     }
 
@@ -922,6 +1118,7 @@ try {
         [System.IO.Directory]::CreateDirectory($workRoot) | Out-Null
         $manifestPath = Join-Path $workRoot ('repair-' + [Guid]::NewGuid().ToString('N') + '.json')
         try {
+            Invoke-ArchiveAllVersions
             $payload = Download-Manifest $index $manifestPath
             Write-Log ('SELF_REPAIR version=' + [string]$index.version)
             Apply-Manifest $index $payload
