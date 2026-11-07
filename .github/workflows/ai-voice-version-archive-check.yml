@@ -89,7 +89,7 @@ jobs:
           Invoke-ArchiveRestore 'v2.30'
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $updater -ToolRoot $fixture -NoLaunch -NoBrowser
           if ($LASTEXITCODE -ne 0) { throw 'Pinned startup failed.' }
-          if ((Get-Content -LiteralPath (Join-Path $fixture 'app.py') -Raw) -notmatch "APP_VERSION\s*=\s*'v2.30'") {
+          if ((Get-Content -LiteralPath (Join-Path $fixture 'app.py') -Raw) -notmatch 'APP_VERSION\s*=\s*["'']v2\.30["'']') {
             throw 'Pinned startup unexpectedly upgraded the restored version.'
           }
           Invoke-ArchiveRestore 'v2.31'
