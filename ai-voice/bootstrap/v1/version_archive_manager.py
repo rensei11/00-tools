@@ -49,8 +49,12 @@ MAX_RESPONSE = 12 * 1024 * 1024
 def fetch_json(url: str) -> object:
     if not (url.startswith(REPO_API + "/") or url == RELEASES_API):
         raise ValueError("Unexpected archive API URL")
+    headers = {"User-Agent": "AI-Voice-Version-Archive/1", "Accept": "application/vnd.github+json"}
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = "Bearer " + token
     req = urllib.request.Request(
-        url, headers={"User-Agent": "AI-Voice-Version-Archive/1", "Accept": "application/vnd.github+json"}
+        url, headers=headers
     )
     with urllib.request.urlopen(req, timeout=45) as response:
         raw = response.read(MAX_RESPONSE + 1)
