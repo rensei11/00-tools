@@ -66,8 +66,8 @@ jobs:
           $requestDir = Join-Path $archive 'requests/isolated-ci'
           New-Item -Path $requestDir -ItemType Directory -Force | Out-Null
 
-          function Invoke-ArchiveRestore([string]$version) {
-            $release = Get-ChildItem -LiteralPath (Join-Path $archive 'manifests') -Filter ('*-' + $version + '--*.json') | Select-Object -First 1
+          function Invoke-ArchiveRestore([string]$version, [string[]]$removePaths = @()) {
+            $release = Get-ChildItem -LiteralPath (Join-Path $archive 'manifests') -Filter ('*' + $version + '--*.json') | Select-Object -First 1
             if (-not $release) { throw ('No published archive found for ' + $version) }
             $indexPath = Join-Path $requestDir ('restore-' + $version + '.json')
             $index = @{
@@ -75,7 +75,7 @@ jobs:
               version = $version
               manifest_path = '../../manifests/' + $release.Name
               manifest_sha256 = (Get-FileHash -LiteralPath $release.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-              remove_paths = @()
+              remove_paths = @($removePaths)
             }
             $index | ConvertTo-Json | Set-Content -LiteralPath $indexPath -Encoding UTF8
             & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $updater -ToolRoot $fixture -IndexPath $indexPath -RestoreArchivedVersion -NoLaunch -NoBrowser
@@ -93,6 +93,14 @@ jobs:
             throw 'Pinned startup unexpectedly upgraded the restored version.'
           }
           Invoke-ArchiveRestore 'v2.31'
+          Invoke-ArchiveRestore '2026-10-02-v13' @('acquisition_controller.py')
+          if (Test-Path -LiteralPath (Join-Path $fixture 'acquisition_controller.py')) {
+            throw 'A newer-only managed file was not removed during legacy restore.'
+          }
+          Invoke-ArchiveRestore 'v2.31'
+          if (-not (Test-Path -LiteralPath (Join-Path $fixture 'acquisition_controller.py') -PathType Leaf)) {
+            throw 'Returning to latest did not restore a removed managed file.'
+          }
           if ((Get-Content -LiteralPath (Join-Path $fixture 'speakers.json') -Raw).Trim() -ne 'DO_NOT_TOUCH') {
             throw 'Protected speaker data changed.'
           }
