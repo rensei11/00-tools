@@ -38,3 +38,18 @@ jobs:
         shell: pwsh
         run: |
           python -m unittest discover -s ai-voice/bootstrap/v1 -p test_version_archive_manager.py -v
+      - name: Archive every currently published version in an isolated Windows folder
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixture = Join-Path $env:RUNNER_TEMP 'ai-voice-version-fixture'
+          New-Item -Path $fixture -ItemType Directory -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $fixture 'app.py') -Value "APP_VERSION = 'v2.31'" -Encoding UTF8
+          python ai-voice/bootstrap/v1/version_archive_manager.py archive --tool-root $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Published version archiving failed.' }
+          python ai-voice/bootstrap/v1/version_archive_manager.py list --tool-root $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Saved version verification failed.' }
+          python ai-voice/bootstrap/v1/version_archive_manager.py preview --tool-root $fixture --version v2.30
+          if ($LASTEXITCODE -ne 0) { throw 'Archived release preview failed.' }
