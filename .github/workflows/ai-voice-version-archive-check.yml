@@ -66,6 +66,8 @@ jobs:
           if ($manifests.Count -ne 3) { throw 'Only active and explicitly requested versions should be saved.' }
       - name: One-file preparation on a Japanese Windows path without changing app code
         shell: powershell
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
           $fixture = Join-Path $env:RUNNER_TEMP '日本語のAI音声ツール'
