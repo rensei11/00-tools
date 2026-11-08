@@ -5,6 +5,7 @@ on:
     paths:
       - 'ai-voice/bootstrap/v1/version_archive_manager.py'
       - 'ai-voice/bootstrap/v1/Voice-Version-Archive.cmd'
+      - 'ai-voice/bootstrap/v1/Prepare-Voice-Version-Archive.cmd'
       - 'ai-voice/bootstrap/v1/migrate_updater_bootstrap_v1.ps1'
       - 'ai-voice/bootstrap/v1/test_version_archive_manager.py'
       - '.github/workflows/ai-voice-version-archive-check.yml'
@@ -30,9 +31,11 @@ jobs:
           $errors = $null
           [void][System.Management.Automation.Language.Parser]::ParseFile($ps1, [ref]$tokens, [ref]$errors)
           if (@($errors).Count -ne 0) { throw ('PowerShell 5.1 parse failed: ' + $errors[0].Message) }
-          $cmd = Join-Path $dir 'Voice-Version-Archive.cmd'
-          foreach ($b in [System.IO.File]::ReadAllBytes($cmd)) {
-            if ($b -gt 127) { throw 'Archive launcher must be ASCII only.' }
+          foreach ($cmdName in @('Voice-Version-Archive.cmd', 'Prepare-Voice-Version-Archive.cmd')) {
+            $cmd = Join-Path $dir $cmdName
+            foreach ($b in [System.IO.File]::ReadAllBytes($cmd)) {
+              if ($b -gt 127) { throw ('Archive launcher must be ASCII only: ' + $cmdName) }
+            }
           }
       - name: Run isolated Python archive and restore preparation tests
         shell: pwsh
@@ -61,6 +64,29 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Selected older release preview failed.' }
           $manifests = @(Get-ChildItem -LiteralPath (Join-Path $fixture '_backup/ai_voice_version_archive/manifests') -Filter '*.json')
           if ($manifests.Count -ne 3) { throw 'Only active and explicitly requested versions should be saved.' }
+      - name: One-file preparation on a Japanese Windows path without changing app code
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixture = Join-Path $env:RUNNER_TEMP '日本語のAI音声ツール'
+          New-Item -Path $fixture -ItemType Directory -Force | Out-Null
+          $app = Join-Path $fixture 'app.py'
+          Set-Content -LiteralPath $app -Value "APP_VERSION = 'v2.31'" -Encoding UTF8
+          $before = (Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash
+          Copy-Item -LiteralPath 'ai-voice/bootstrap/v1/Prepare-Voice-Version-Archive.cmd' -Destination $fixture
+          Push-Location $fixture
+          try {
+            & cmd.exe /d /c 'Prepare-Voice-Version-Archive.cmd'
+            if ($LASTEXITCODE -ne 0) { throw 'One-file archive preparation failed on a Japanese Windows path.' }
+          } finally {
+            Pop-Location
+          }
+          $after = (Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash
+          if ($before -ne $after) { throw 'One-file preparation changed installed code.' }
+          $manifests = @(Get-ChildItem -LiteralPath (Join-Path $fixture '_backup/ai_voice_version_archive/manifests') -Filter '*.json')
+          if ($manifests.Count -ne 1 -or $manifests[0].Name -notmatch '-v2\.31--') {
+            throw 'One-file preparation must archive only the active release.'
+          }
       - name: Exercise PowerShell downgrade, pin and return on disposable files
         shell: powershell
         run: |
