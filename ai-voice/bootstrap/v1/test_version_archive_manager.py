@@ -195,6 +195,35 @@ class ArchiveTests(unittest.TestCase):
         self.assertEqual(request["manifest_sha256"], manager.sha256(release))
         self.assertEqual((self.tool / "app.py").read_text(encoding="utf-8"), "APP_VERSION = 'v2.31'\n")
 
+    def test_candidate_updater_only_runs_on_disposable_fixture(self) -> None:
+        candidate = Path(self.temp.name) / "candidate.ps1"
+        candidate.write_text("# RestoreArchivedVersion test updater", encoding="ascii")
+        with self.assertRaisesRegex(ValueError, "marked disposable CI fixture"):
+            manager.restore(self.tool, "v2.30", execute=True, test_updater_file=candidate)
+
+        (self.tool / ".archive_restore_ci_fixture").write_text(
+            "DISPOSABLE_WINDOWS_CI_ONLY\n", encoding="ascii"
+        )
+        archive = manager.archive_root(self.tool)
+        for version in ("v2.30", "v2.31"):
+            raw = release_bytes(version)
+            manager.write_new_immutable(
+                archive / "manifests" / ("2026-11-02-" + version + "--" + manager.git_blob_sha(raw) + ".json"), raw
+            )
+
+        def pretend_success(arguments, check):
+            self.assertIn("-RestoreArchivedVersion", arguments)
+            self.assertIn("-NoLaunch", arguments)
+            self.assertIn("-NoBrowser", arguments)
+            self.assertNotIn("Bypass", arguments)
+            archive.joinpath("pinned-version.txt").write_text("v2.30", encoding="ascii")
+            return types.SimpleNamespace(returncode=0)
+
+        with mock.patch.object(manager.urllib.request, "urlopen", side_effect=AssertionError("No remote updater")), \
+             mock.patch.object(manager.subprocess, "run", side_effect=pretend_success):
+            manager.restore(self.tool, "v2.30", execute=True, test_updater_file=candidate)
+        self.assertEqual(len(list((archive / "snapshots").iterdir())), 1)
+
     def test_immutable_archive_refuses_overwrite(self) -> None:
         path = manager.archive_root(self.tool) / "test.txt"
         manager.write_new_immutable(path, b"original")
