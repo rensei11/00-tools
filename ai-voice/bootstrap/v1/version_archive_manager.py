@@ -1,4 +1,4 @@
-"""Archive all published AI-voice code releases and restore one deliberately.
+"""Archive published v2.20+ AI-voice code releases and restore one deliberately.
 
 Standard-library only. This never copies or deletes model, reference-audio,
 generated-audio or speaker/history data. The archive is append-only.
@@ -32,6 +32,7 @@ ARCHIVE_REL = Path("_backup") / "ai_voice_version_archive"
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 VERSION_RE = re.compile(r"(?:v\d+\.\d+|\d{4}-\d\d-\d\d-v\d+)\Z")
 FILE_RE = re.compile(r"\d{4}-\d\d-\d\d-v[\w.]+\.json\Z", re.ASCII)
+NEW_FILE_RE = re.compile(r"\d{4}-\d\d-\d\d-(v\d+\.\d+)\.json\Z", re.ASCII)
 ALLOWED_SUFFIXES = {".py", ".ps1", ".cmd", ".bat", ".js", ".json", ".md"}
 PROTECTED_NAMES = {
     "speakers.json", "games.json", "pronunciation_dictionary.json",
@@ -44,6 +45,14 @@ PROTECTED_DIRS = {
     ".git", ".github", "_backup", "参照音声", "音声", "shared_results",
 }
 MAX_RESPONSE = 12 * 1024 * 1024
+
+
+def is_new_number_version(version: str) -> bool:
+    match = re.fullmatch(r"v(\d+)\.(\d+)", version)
+    if not match:
+        return False
+    major, minor = map(int, match.groups())
+    return major > 2 or (major == 2 and minor >= 20)
 
 
 def fetch_json(url: str) -> object:
@@ -155,6 +164,10 @@ def local_releases(root: Path) -> list[dict[str, object]]:
         if git_blob_sha(raw) != match.group(2):
             raise ValueError("Damaged saved release: " + path.name)
         version, files = inspect_manifest(raw)
+        # Older archives may already exist from a previous setup. Keep them
+        # untouched on disk, but do not expose them as rollback candidates.
+        if not is_new_number_version(version):
+            continue
         result.append({"path": path, "version": version, "files": files, "sha256": sha256(raw)})
     return result
 
@@ -169,7 +182,8 @@ def download_all(tool_root: Path) -> None:
         if not isinstance(item, dict):
             raise ValueError("Unexpected release listing entry")
         name, blob = item.get("name"), item.get("sha")
-        if not isinstance(name, str) or not FILE_RE.fullmatch(name):
+        filename_match = NEW_FILE_RE.fullmatch(name) if isinstance(name, str) else None
+        if not filename_match or not is_new_number_version(filename_match.group(1)):
             continue
         if not isinstance(blob, str) or not SHA_RE.fullmatch(blob):
             raise ValueError("Release has invalid Git object identifier")
@@ -189,6 +203,8 @@ def download_all(tool_root: Path) -> None:
         if git_blob_sha(raw) != blob:
             raise ValueError("Release hash mismatch: " + name)
         version, files = inspect_manifest(raw)
+        if version != name.split("-", 3)[-1][:-5]:
+            raise ValueError("Release filename and embedded version disagree: " + name)
         write_new_immutable(path, raw)
         print(f"[{count}/{len(records)}] {version} / {len(files)} files / verified")
 
@@ -253,6 +269,8 @@ def snapshot_current(tool_root: Path, archive: Path, affected: set[str], label: 
 
 
 def restore(tool_root: Path, requested: str, *, execute: bool) -> None:
+    if not is_new_number_version(requested):
+        raise ValueError("Only new-number versions v2.20 and later can be restored")
     root = archive_root(tool_root)
     releases = local_releases(root)
     matches = [release for release in releases if release["version"] == requested]
@@ -319,7 +337,7 @@ def unpin(tool_root: Path) -> None:
 def menu(tool_root: Path) -> None:
     while True:
         print("\nAI音声ツール：過去版の保存と復元")
-        print("1. 公開済みの全バージョンを保存・照合")
+        print("1. 新番号（v2.20以降）の公開バージョンを保存・照合")
         print("2. 保存済みバージョン一覧")
         print("3. 指定した過去版へ復元")
         print("4. 過去版の固定を解除し、通常更新へ戻す")
@@ -335,7 +353,7 @@ def menu(tool_root: Path) -> None:
             elif choice == "3":
                 list_versions(tool_root)
                 version = input("戻したい版を入力してください（例: v2.30）: ").strip()
-                if not VERSION_RE.fullmatch(version):
+                if not is_new_number_version(version):
                     raise ValueError("版の入力形式が正しくありません")
                 restore(tool_root, version, execute=False)
                 print("復元すると現在のプログラムが置き換わります。")
@@ -358,7 +376,7 @@ def menu(tool_root: Path) -> None:
 
 
 def main() -> int:
-    cli = argparse.ArgumentParser(description="AI voice: archive every release and restore a chosen version")
+    cli = argparse.ArgumentParser(description="AI voice: archive v2.20+ releases and restore a chosen version")
     cli.add_argument("action", choices=("archive", "list", "preview", "restore", "unpin", "menu"))
     cli.add_argument("--tool-root", type=Path, default=Path(__file__).resolve().parent)
     cli.add_argument("--version", help="Version to preview or restore")
@@ -369,7 +387,7 @@ def main() -> int:
     elif args.action == "list":
         list_versions(root)
     elif args.action in ("preview", "restore"):
-        if not args.version or not VERSION_RE.fullmatch(args.version):
+        if not args.version or not is_new_number_version(args.version):
             raise ValueError("A valid --version is required")
         restore(root, args.version, execute=(args.action == "restore"))
     elif args.action == "unpin":
