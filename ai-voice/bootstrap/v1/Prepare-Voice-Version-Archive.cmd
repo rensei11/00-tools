@@ -22,13 +22,13 @@ if errorlevel 1 (
     )
 )
 echo Step 1/2: Verify and prepare archive program.
-%PYTHON% -c "import sys,pathlib,urllib.request,hashlib; root=pathlib.Path(sys.argv[1]); dest=pathlib.Path(sys.argv[2]); parents=(root,root/'_backup',root/'_backup'/'ai_voice_version_archive',dest.parent); assert not any(p.is_symlink() for p in parents),'Unsafe archive path'; data=urllib.request.urlopen(urllib.request.Request(sys.argv[3],headers={'User-Agent':'AI-Voice-Archive-Prepare/1'}),timeout=45).read(25000); assert hashlib.sha256(data).hexdigest()==sys.argv[4],'Downloaded program checksum mismatch'; dest.parent.mkdir(parents=True,exist_ok=True); assert not dest.exists() or dest.read_bytes()==data,'Existing archive program differs'; dest.write_bytes(data) if not dest.exists() else None" "%TOOL%" "%STAGED%" "%SOURCE_URL%" "%SOURCE_SHA256%"
+%PYTHON% -c "import sys,pathlib,urllib.request,hashlib; root=pathlib.Path(sys.argv[1]); dest=pathlib.Path(sys.argv[2]); parents=(root,root/'_backup',root/'_backup'/'ai_voice_version_archive',dest.parent); assert not any(p.is_symlink() for p in parents),'Unsafe archive path'; data=urllib.request.urlopen(urllib.request.Request(sys.argv[3],headers={'User-Agent':'AI-Voice-Archive-Prepare/1'}),timeout=45).read(25000); assert hashlib.sha256(data).hexdigest()==sys.argv[4],'Downloaded program checksum mismatch'; dest.parent.mkdir(parents=True,exist_ok=True); assert not dest.exists() or dest.read_bytes()==data,'Existing archive program differs'; dest.write_bytes(data) if not dest.exists() else None" "%TOOL%." "%STAGED%" "%SOURCE_URL%" "%SOURCE_SHA256%"
 if errorlevel 1 (
     echo RESULT: FAILED - Could not verify the archive program.
     goto fail
 )
 echo Step 2/2: Save and verify the currently installed release.
-%PYTHON% "%STAGED%" archive --tool-root "%TOOL%"
+%PYTHON% "%STAGED%" archive --tool-root "%TOOL%."
 if errorlevel 1 (
     echo RESULT: FAILED - The release was not verified.
     goto fail
