@@ -38,7 +38,7 @@ jobs:
         shell: pwsh
         run: |
           python -m unittest discover -s ai-voice/bootstrap/v1 -p test_version_archive_manager.py -v
-      - name: Archive published new-number versions in an isolated Windows folder
+      - name: Archive only the active version and requested rollback points
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -50,14 +50,17 @@ jobs:
           python ai-voice/bootstrap/v1/version_archive_manager.py archive --tool-root $fixture
           if ($LASTEXITCODE -ne 0) { throw 'Published version archiving failed.' }
           $manifests = @(Get-ChildItem -LiteralPath (Join-Path $fixture '_backup/ai_voice_version_archive/manifests') -Filter '*.json')
-          if ($manifests.Count -lt 12) { throw 'Fewer than the 12 known new-number releases were archived.' }
-          if (@($manifests | Where-Object { $_.Name -match '-v\d+--' }).Count -gt 0) {
-            throw 'Old dated version was unexpectedly archived.'
+          if ($manifests.Count -ne 1 -or $manifests[0].Name -notmatch '-v2\.31--') {
+            throw 'Archiving must save only the active v2.31, not all intermediate releases.'
           }
           python ai-voice/bootstrap/v1/version_archive_manager.py list --tool-root $fixture
           if ($LASTEXITCODE -ne 0) { throw 'Saved version verification failed.' }
           python ai-voice/bootstrap/v1/version_archive_manager.py preview --tool-root $fixture --version v2.30
           if ($LASTEXITCODE -ne 0) { throw 'Archived release preview failed.' }
+          python ai-voice/bootstrap/v1/version_archive_manager.py preview --tool-root $fixture --version v2.20
+          if ($LASTEXITCODE -ne 0) { throw 'Selected older release preview failed.' }
+          $manifests = @(Get-ChildItem -LiteralPath (Join-Path $fixture '_backup/ai_voice_version_archive/manifests') -Filter '*.json')
+          if ($manifests.Count -ne 3) { throw 'Only active and explicitly requested versions should be saved.' }
       - name: Exercise PowerShell downgrade, pin and return on disposable files
         shell: powershell
         run: |
