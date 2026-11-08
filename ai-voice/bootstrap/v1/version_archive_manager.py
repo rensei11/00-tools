@@ -282,9 +282,15 @@ def snapshot_current(tool_root: Path, archive: Path, affected: set[str], label: 
     return target
 
 
-def restore(tool_root: Path, requested: str, *, execute: bool) -> None:
+def restore(tool_root: Path, requested: str, *, execute: bool,
+            test_updater_file: Path | None = None) -> None:
     if not is_new_number_version(requested):
         raise ValueError("Only new-number versions v2.20 and later can be restored")
+    if test_updater_file is not None:
+        marker = tool_root / ".archive_restore_ci_fixture"
+        if (marker.is_symlink() or not marker.is_file()
+                or marker.read_text(encoding="ascii").strip() != "DISPOSABLE_WINDOWS_CI_ONLY"):
+            raise ValueError("Candidate updater can run only in a marked disposable CI fixture")
     root = archive_root(tool_root)
     releases = local_releases(root)
     # Always preserve the currently installed code's public release before
@@ -312,11 +318,14 @@ def restore(tool_root: Path, requested: str, *, execute: bool) -> None:
         return
 
     updater_bytes: bytes
-    # Fetch the official updater to a new isolated filename. It must include
-    # the exact opt-in restore contract, otherwise fail before any changes.
-    req = urllib.request.Request(UPDATER_URL, headers={"User-Agent": "AI-Voice-Version-Archive/1"})
-    with urllib.request.urlopen(req, timeout=45) as response:
-        updater_bytes = response.read(200_001)
+    # In disposable tests only, use the candidate updater under review.
+    # Normal user restores still fetch only the published updater from main.
+    if test_updater_file is not None:
+        updater_bytes = test_updater_file.read_bytes()
+    else:
+        req = urllib.request.Request(UPDATER_URL, headers={"User-Agent": "AI-Voice-Version-Archive/1"})
+        with urllib.request.urlopen(req, timeout=45) as response:
+            updater_bytes = response.read(200_001)
     if len(updater_bytes) > 200_000 or b"RestoreArchivedVersion" not in updater_bytes:
         raise ValueError("Published updater has no supported archive restore operation")
     updater = root / ("verified_restore_updater--" + sha256(updater_bytes) + ".ps1")
@@ -335,10 +344,13 @@ def restore(tool_root: Path, requested: str, *, execute: bool) -> None:
     index_path = request_dir / "restore-index.json"
     write_new_immutable(index_path, json.dumps(index, indent=2).encode("utf-8"))
     print("Verified pre-restore snapshot: " + str(backup))
-    result = subprocess.run([
-        "powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(updater),
+    command = [
+        "powershell.exe", "-NoProfile", "-File", str(updater),
         "-ToolRoot", str(tool_root), "-IndexPath", str(index_path), "-RestoreArchivedVersion",
-    ], check=False)
+    ]
+    if test_updater_file is not None:
+        command.extend(["-NoLaunch", "-NoBrowser"])
+    result = subprocess.run(command, check=False)
     if result.returncode:
         raise RuntimeError(f"Restore failed (exit {result.returncode}); original snapshot retained at {backup}")
     pin = root / "pinned-version.txt"
@@ -402,8 +414,12 @@ def main() -> int:
     cli.add_argument("action", choices=("archive", "list", "preview", "restore", "unpin", "menu"))
     cli.add_argument("--tool-root", type=Path, default=Path(__file__).resolve().parent)
     cli.add_argument("--version", help="Version to preview or restore")
+    cli.add_argument("--test-updater-file", type=Path,
+                     help="Disposable test fixtures only: candidate updater not yet published to main")
     args = cli.parse_args()
     root = args.tool_root.resolve()
+    if args.test_updater_file is not None and args.action != "restore":
+        raise ValueError("--test-updater-file is permitted only for restore")
     if args.action == "archive":
         download_all(root, args.version)
     elif args.action == "list":
@@ -411,7 +427,8 @@ def main() -> int:
     elif args.action in ("preview", "restore"):
         if not args.version or not is_new_number_version(args.version):
             raise ValueError("A valid --version is required")
-        restore(root, args.version, execute=(args.action == "restore"))
+        restore(root, args.version, execute=(args.action == "restore"),
+                test_updater_file=args.test_updater_file)
     elif args.action == "unpin":
         unpin(root)
     elif args.action == "menu":
