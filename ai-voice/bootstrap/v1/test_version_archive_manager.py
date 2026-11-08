@@ -32,7 +32,7 @@ class ArchiveTests(unittest.TestCase):
         self.tool.mkdir()
         (self.tool / "app.py").write_text("APP_VERSION = 'v2.31'\n", encoding="utf-8")
 
-    def test_archive_all_preserves_and_verifies_every_blob(self) -> None:
+    def test_archive_new_numbers_preserves_and_verifies_every_blob(self) -> None:
         old = release_bytes("v2.30", {"old.py": "old"})
         new = release_bytes("v2.31", {"new.py": "new"})
         samples = [("2026-11-02-v2.30.json", old), ("2026-11-02-v2.31.json", new)]
@@ -62,6 +62,40 @@ class ArchiveTests(unittest.TestCase):
         oldest["path"].write_bytes(b"corrupted")
         with self.assertRaisesRegex(ValueError, "Damaged saved release"):
             manager.local_releases(archive)
+
+    def test_ignores_legacy_releases_without_deleting_existing_archive(self) -> None:
+        legacy = release_bytes("2026-10-02-v13")
+        below_cutoff = release_bytes("v2.19")
+        new = release_bytes("v2.20")
+        future = release_bytes("v3.0")
+        samples = [
+            ("2026-10-02-v13.json", legacy),
+            ("2026-10-27-v2.19.json", below_cutoff),
+            ("2026-10-28-v2.20.json", new),
+            ("2026-12-01-v3.0.json", future),
+        ]
+        listing = [{"name": name, "sha": manager.git_blob_sha(raw)} for name, raw in samples]
+        blobs = {manager.git_blob_sha(raw): raw for _, raw in samples}
+        requested_blobs = []
+
+        def fake_fetch(url: str) -> object:
+            if url == manager.RELEASES_API:
+                return listing
+            identifier = url.rsplit("/", 1)[-1]
+            requested_blobs.append(identifier)
+            return {"sha": identifier, "encoding": "base64", "content": base64.b64encode(blobs[identifier]).decode("ascii")}
+
+        archive = manager.archive_root(self.tool)
+        legacy_path = archive / "manifests" / ("2026-10-02-v13--" + manager.git_blob_sha(legacy) + ".json")
+        manager.write_new_immutable(legacy_path, legacy)
+        with mock.patch.object(manager, "fetch_json", side_effect=fake_fetch):
+            manager.download_all(self.tool)
+
+        self.assertEqual(set(requested_blobs), {manager.git_blob_sha(new), manager.git_blob_sha(future)})
+        self.assertEqual({x["version"] for x in manager.local_releases(archive)}, {"v2.20", "v3.0"})
+        self.assertTrue(legacy_path.exists(), "Previously saved legacy archive must never be removed")
+        with self.assertRaisesRegex(ValueError, "Only new-number"):
+            manager.restore(self.tool, "2026-10-02-v13", execute=False)
 
     def test_snapshot_copies_code_only_and_never_touches_user_data(self) -> None:
         (self.tool / "speaker.json").write_text("PERSONAL", encoding="utf-8")
