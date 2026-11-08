@@ -118,3 +118,32 @@ jobs:
           if (@(Get-ChildItem -LiteralPath (Join-Path $archive 'snapshots') -Directory).Count -lt 2) {
             throw 'Version restore did not keep pre-restore snapshots.'
           }
+      - name: Exercise the full archive manager restore command on disposable Windows files
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixture = Join-Path $env:RUNNER_TEMP 'ai-voice-version-fixture'
+          $archive = Join-Path $fixture '_backup/ai_voice_version_archive'
+          Set-Content -LiteralPath (Join-Path $fixture '.archive_restore_ci_fixture') -Value 'DISPOSABLE_WINDOWS_CI_ONLY' -Encoding ASCII
+          $candidate = (Resolve-Path 'ai-voice/bootstrap/v1/migrate_updater_bootstrap_v1.ps1').Path
+
+          function Test-ManagerRestore([string]$version) {
+            python ai-voice/bootstrap/v1/version_archive_manager.py restore --tool-root $fixture --version $version --test-updater-file $candidate
+            if ($LASTEXITCODE -ne 0) { throw ('Full archive manager restore failed: ' + $version) }
+            $line = Get-Content -LiteralPath (Join-Path $fixture 'app.py') | Where-Object { $_ -match '^APP_VERSION\s*=' } | Select-Object -First 1
+            if ($line -notmatch [regex]::Escape($version)) { throw ('Wrong installed version after manager restore: ' + $line) }
+            $pin = [System.IO.File]::ReadAllText((Join-Path $archive 'pinned-version.txt'), [System.Text.Encoding]::ASCII).Trim()
+            if ($pin -ne $version) { throw ('Manager restore did not pin version: ' + $pin) }
+          }
+
+          Test-ManagerRestore 'v2.30'
+          Test-ManagerRestore 'v2.31'
+          if ((Get-Content -LiteralPath (Join-Path $fixture 'speakers.json') -Raw).Trim() -ne 'DO_NOT_TOUCH') {
+            throw 'Full manager restore changed protected speaker data.'
+          }
+          if ((Get-Content -LiteralPath (Join-Path $fixture 'shared_results/paimon.json') -Raw).Trim() -ne 'DO_NOT_TOUCH') {
+            throw 'Full manager restore changed protected results.'
+          }
+          if (@(Get-ChildItem -LiteralPath (Join-Path $archive 'snapshots') -Directory).Count -lt 6) {
+            throw 'The manager did not preserve both additional pre-restore snapshots.'
+          }
