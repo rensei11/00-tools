@@ -1,4 +1,4 @@
-"""Archive published v2.20+ AI-voice code releases and restore one deliberately.
+"""Save a chosen AI-voice recovery point and restore it deliberately.
 
 Standard-library only. This never copies or deletes model, reference-audio,
 generated-audio or speaker/history data. The archive is append-only.
@@ -141,6 +141,14 @@ def archive_root(tool_root: Path) -> Path:
     return root
 
 
+def installed_version(tool_root: Path) -> str:
+    content = (tool_root / "app.py").read_text(encoding="utf-8-sig")
+    match = re.search(r"^APP_VERSION\s*=\s*['\"](v\d+\.\d+)['\"]", content, re.MULTILINE)
+    if not match or not is_new_number_version(match.group(1)):
+        raise ValueError("Cannot identify the installed new-number app version")
+    return match.group(1)
+
+
 def write_new_immutable(path: Path, raw: bytes) -> None:
     if path.exists():
         if path.read_bytes() != raw:
@@ -172,7 +180,13 @@ def local_releases(root: Path) -> list[dict[str, object]]:
     return result
 
 
-def download_all(tool_root: Path) -> None:
+def download_all(tool_root: Path, only_version: str | None = None) -> None:
+    # GitHub already keeps every published manifest. Store only the version
+    # currently in use, or one explicitly requested for rollback. Do not
+    # duplicate every intermediate/failed release on the user's PC.
+    selected = only_version or installed_version(tool_root)
+    if not is_new_number_version(selected):
+        raise ValueError("Only new-number versions v2.20 and later can be archived")
     root = archive_root(tool_root)
     listing = fetch_json(RELEASES_API)
     if not isinstance(listing, list):
@@ -183,13 +197,13 @@ def download_all(tool_root: Path) -> None:
             raise ValueError("Unexpected release listing entry")
         name, blob = item.get("name"), item.get("sha")
         filename_match = NEW_FILE_RE.fullmatch(name) if isinstance(name, str) else None
-        if not filename_match or not is_new_number_version(filename_match.group(1)):
+        if not filename_match or filename_match.group(1) != selected:
             continue
         if not isinstance(blob, str) or not SHA_RE.fullmatch(blob):
             raise ValueError("Release has invalid Git object identifier")
         records.append((name, blob))
-    if not records:
-        raise ValueError("Published release listing was empty")
+    if len(records) != 1:
+        raise ValueError(f"Expected one published manifest for {selected}; found {len(records)}")
 
     for count, (name, blob) in enumerate(records, 1):
         path = root / "manifests" / (name[:-5] + "--" + blob + ".json")
@@ -209,8 +223,8 @@ def download_all(tool_root: Path) -> None:
         print(f"[{count}/{len(records)}] {version} / {len(files)} files / verified")
 
     all_local = local_releases(root)
-    if len(all_local) < len(records):
-        raise ValueError("One or more archived releases could not be verified")
+    if len([item for item in all_local if item["version"] == selected]) != 1:
+        raise ValueError("Selected release could not be verified")
     # This mutable completion marker is only a cache; archived blobs never change.
     complete_path = root / "archive-complete.json"
     complete_temp = root / ("archive-complete-" + uuid.uuid4().hex + ".tmp")
@@ -219,7 +233,7 @@ def download_all(tool_root: Path) -> None:
         "published": [{"name": name, "sha": blob} for name, blob in records],
     }, indent=2), encoding="utf-8")
     os.replace(complete_temp, complete_path)
-    print(f"Archive complete: {len(records)} published releases; saved at {root}")
+    print(f"Recovery point saved: {selected}; saved at {root}")
 
 
 def list_versions(tool_root: Path) -> None:
@@ -272,6 +286,14 @@ def restore(tool_root: Path, requested: str, *, execute: bool) -> None:
     if not is_new_number_version(requested):
         raise ValueError("Only new-number versions v2.20 and later can be restored")
     root = archive_root(tool_root)
+    releases = local_releases(root)
+    # Always preserve the currently installed code's public release before
+    # preparing a downgrade. This also identifies newer-only files to remove.
+    current = installed_version(tool_root)
+    if not any(item["version"] == current for item in releases):
+        download_all(tool_root, current)
+    if not any(item["version"] == requested for item in local_releases(root)):
+        download_all(tool_root, requested)
     releases = local_releases(root)
     matches = [release for release in releases if release["version"] == requested]
     if len(matches) != 1:
@@ -337,9 +359,9 @@ def unpin(tool_root: Path) -> None:
 def menu(tool_root: Path) -> None:
     while True:
         print("\nAI音声ツール：過去版の保存と復元")
-        print("1. 新番号（v2.20以降）の公開バージョンを保存・照合")
+        print("1. 現在使用中の版だけを復元用に保存・照合")
         print("2. 保存済みバージョン一覧")
-        print("3. 指定した過去版へ復元")
+        print("3. GitHubに保存済みの指定版を取得して復元")
         print("4. 過去版の固定を解除し、通常更新へ戻す")
         print("0. 終了")
         choice = input("番号を入力してください: ").strip()
@@ -376,14 +398,14 @@ def menu(tool_root: Path) -> None:
 
 
 def main() -> int:
-    cli = argparse.ArgumentParser(description="AI voice: archive v2.20+ releases and restore a chosen version")
+    cli = argparse.ArgumentParser(description="AI voice: keep the active version and chosen rollback points")
     cli.add_argument("action", choices=("archive", "list", "preview", "restore", "unpin", "menu"))
     cli.add_argument("--tool-root", type=Path, default=Path(__file__).resolve().parent)
     cli.add_argument("--version", help="Version to preview or restore")
     args = cli.parse_args()
     root = args.tool_root.resolve()
     if args.action == "archive":
-        download_all(root)
+        download_all(root, args.version)
     elif args.action == "list":
         list_versions(root)
     elif args.action in ("preview", "restore"):
