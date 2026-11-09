@@ -1,0 +1,151 @@
+name: AI Voice Version Archive Check
+
+on:
+  pull_request:
+    paths:
+      - 'ai-voice/bootstrap/v1/version_archive_manager.py'
+      - 'ai-voice/bootstrap/v1/Voice-Version-Archive.cmd'
+      - 'ai-voice/bootstrap/v1/migrate_updater_bootstrap_v1.ps1'
+      - 'ai-voice/bootstrap/v1/test_version_archive_manager.py'
+      - '.github/workflows/ai-voice-version-archive-check.yml'
+
+jobs:
+  isolated-windows-check:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify Windows PowerShell 5.1 parser and file encodings
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $dir = 'ai-voice/bootstrap/v1'
+          $ps1 = Join-Path $dir 'migrate_updater_bootstrap_v1.ps1'
+          $bytes = [System.IO.File]::ReadAllBytes($ps1)
+          if ($bytes.Length -lt 3 -or $bytes[0] -ne 239 -or $bytes[1] -ne 187 -or $bytes[2] -ne 191) {
+            throw 'Updater PS1 is not UTF-8 BOM.'
+          }
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile($ps1, [ref]$tokens, [ref]$errors)
+          if (@($errors).Count -ne 0) { throw ('PowerShell 5.1 parse failed: ' + $errors[0].Message) }
+          foreach ($cmdName in @('Voice-Version-Archive.cmd')) {
+            $cmd = Join-Path $dir $cmdName
+            foreach ($b in [System.IO.File]::ReadAllBytes($cmd)) {
+              if ($b -gt 127) { throw ('Archive launcher must be ASCII only: ' + $cmdName) }
+            }
+          }
+      - name: Run isolated Python archive and restore preparation tests
+        shell: pwsh
+        run: |
+          python -m unittest discover -s ai-voice/bootstrap/v1 -p test_version_archive_manager.py -v
+      - name: Archive only the active version and requested rollback points
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixture = Join-Path $env:RUNNER_TEMP 'ai-voice-version-fixture'
+          New-Item -Path $fixture -ItemType Directory -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $fixture 'app.py') -Value "APP_VERSION = 'v2.31'" -Encoding UTF8
+          python ai-voice/bootstrap/v1/version_archive_manager.py archive --tool-root $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Published version archiving failed.' }
+          $manifests = @(Get-ChildItem -LiteralPath (Join-Path $fixture '_backup/ai_voice_version_archive/manifests') -Filter '*.json')
+          if ($manifests.Count -ne 1 -or $manifests[0].Name -notmatch '-v2\.31--') {
+            throw 'Archiving must save only the active v2.31, not all intermediate releases.'
+          }
+          python ai-voice/bootstrap/v1/version_archive_manager.py list --tool-root $fixture
+          if ($LASTEXITCODE -ne 0) { throw 'Saved version verification failed.' }
+          python ai-voice/bootstrap/v1/version_archive_manager.py preview --tool-root $fixture --version v2.30
+          if ($LASTEXITCODE -ne 0) { throw 'Archived release preview failed.' }
+          python ai-voice/bootstrap/v1/version_archive_manager.py preview --tool-root $fixture --version v2.20
+          if ($LASTEXITCODE -ne 0) { throw 'Selected older release preview failed.' }
+          $manifests = @(Get-ChildItem -LiteralPath (Join-Path $fixture '_backup/ai_voice_version_archive/manifests') -Filter '*.json')
+          if ($manifests.Count -ne 3) { throw 'Only active and explicitly requested versions should be saved.' }
+      - name: Exercise PowerShell downgrade, pin and return on disposable files
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixture = Join-Path $env:RUNNER_TEMP 'ai-voice-version-fixture'
+          $archive = Join-Path $fixture '_backup/ai_voice_version_archive'
+          $updater = (Resolve-Path 'ai-voice/bootstrap/v1/migrate_updater_bootstrap_v1.ps1').Path
+          Set-Content -LiteralPath (Join-Path $fixture 'speakers.json') -Value 'DO_NOT_TOUCH' -Encoding ASCII
+          New-Item -Path (Join-Path $fixture 'shared_results') -ItemType Directory -Force | Out-Null
+          Set-Content -LiteralPath (Join-Path $fixture 'shared_results/paimon.json') -Value 'DO_NOT_TOUCH' -Encoding ASCII
+          $requestDir = Join-Path $archive 'requests/isolated-ci'
+          New-Item -Path $requestDir -ItemType Directory -Force | Out-Null
+
+          function Invoke-ArchiveRestore([string]$version, [string[]]$removePaths = @()) {
+            $release = Get-ChildItem -LiteralPath (Join-Path $archive 'manifests') -Filter ('*' + $version + '--*.json') | Select-Object -First 1
+            if (-not $release) { throw ('No published archive found for ' + $version) }
+            $indexPath = Join-Path $requestDir ('restore-' + $version + '.json')
+            $index = @{
+              schema = 1
+              version = $version
+              manifest_path = '../../manifests/' + $release.Name
+              manifest_sha256 = (Get-FileHash -LiteralPath $release.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              remove_paths = @($removePaths)
+            }
+            $index | ConvertTo-Json | Set-Content -LiteralPath $indexPath -Encoding UTF8
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $updater -ToolRoot $fixture -IndexPath $indexPath -RestoreArchivedVersion -NoLaunch -NoBrowser
+            if ($LASTEXITCODE -ne 0) { throw ('Isolated restore failed: ' + $version) }
+            $versionLine = Get-Content -LiteralPath (Join-Path $fixture 'app.py') | Where-Object { $_ -match '^APP_VERSION\s*=' } | Select-Object -First 1
+            if ($versionLine -notmatch [regex]::Escape($version)) { throw ('Wrong installed version: ' + $versionLine) }
+            $pin = [System.IO.File]::ReadAllText((Join-Path $archive 'pinned-version.txt'), [System.Text.Encoding]::ASCII).Trim()
+            if ($pin -ne $version) { throw ('Version pin mismatch: ' + $pin) }
+          }
+
+          Invoke-ArchiveRestore 'v2.30'
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $updater -ToolRoot $fixture -NoLaunch -NoBrowser
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned startup failed.' }
+          if ((Get-Content -LiteralPath (Join-Path $fixture 'app.py') -Raw) -notmatch 'APP_VERSION\s*=\s*["'']v2\.30["'']') {
+            throw 'Pinned startup unexpectedly upgraded the restored version.'
+          }
+          Invoke-ArchiveRestore 'v2.31'
+          Invoke-ArchiveRestore 'v2.20' @('sources/dna_local.py')
+          if (Test-Path -LiteralPath (Join-Path $fixture 'sources/dna_local.py')) {
+            throw 'A newer-only managed file was not removed during v2.20 restore.'
+          }
+          Invoke-ArchiveRestore 'v2.31'
+          if (-not (Test-Path -LiteralPath (Join-Path $fixture 'sources/dna_local.py') -PathType Leaf)) {
+            throw 'Returning to latest did not restore a removed managed file.'
+          }
+          if ((Get-Content -LiteralPath (Join-Path $fixture 'speakers.json') -Raw).Trim() -ne 'DO_NOT_TOUCH') {
+            throw 'Protected speaker data changed.'
+          }
+          if ((Get-Content -LiteralPath (Join-Path $fixture 'shared_results/paimon.json') -Raw).Trim() -ne 'DO_NOT_TOUCH') {
+            throw 'Protected shared results changed.'
+          }
+          if (@(Get-ChildItem -LiteralPath (Join-Path $archive 'snapshots') -Directory).Count -lt 2) {
+            throw 'Version restore did not keep pre-restore snapshots.'
+          }
+      - name: Exercise the full archive manager restore command on disposable Windows files
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $fixture = Join-Path $env:RUNNER_TEMP 'ai-voice-version-fixture'
+          $archive = Join-Path $fixture '_backup/ai_voice_version_archive'
+          Set-Content -LiteralPath (Join-Path $fixture '.archive_restore_ci_fixture') -Value 'DISPOSABLE_WINDOWS_CI_ONLY' -Encoding ASCII
+          $candidate = (Resolve-Path 'ai-voice/bootstrap/v1/migrate_updater_bootstrap_v1.ps1').Path
+
+          function Test-ManagerRestore([string]$version) {
+            python ai-voice/bootstrap/v1/version_archive_manager.py restore --tool-root $fixture --version $version --test-updater-file $candidate
+            if ($LASTEXITCODE -ne 0) { throw ('Full archive manager restore failed: ' + $version) }
+            $line = Get-Content -LiteralPath (Join-Path $fixture 'app.py') | Where-Object { $_ -match '^APP_VERSION\s*=' } | Select-Object -First 1
+            if ($line -notmatch [regex]::Escape($version)) { throw ('Wrong installed version after manager restore: ' + $line) }
+            $pin = [System.IO.File]::ReadAllText((Join-Path $archive 'pinned-version.txt'), [System.Text.Encoding]::ASCII).Trim()
+            if ($pin -ne $version) { throw ('Manager restore did not pin version: ' + $pin) }
+          }
+
+          Test-ManagerRestore 'v2.30'
+          Test-ManagerRestore 'v2.31'
+          if ((Get-Content -LiteralPath (Join-Path $fixture 'speakers.json') -Raw).Trim() -ne 'DO_NOT_TOUCH') {
+            throw 'Full manager restore changed protected speaker data.'
+          }
+          if ((Get-Content -LiteralPath (Join-Path $fixture 'shared_results/paimon.json') -Raw).Trim() -ne 'DO_NOT_TOUCH') {
+            throw 'Full manager restore changed protected results.'
+          }
+          if (@(Get-ChildItem -LiteralPath (Join-Path $archive 'snapshots') -Directory).Count -lt 6) {
+            throw 'The manager did not preserve both additional pre-restore snapshots.'
+          }
