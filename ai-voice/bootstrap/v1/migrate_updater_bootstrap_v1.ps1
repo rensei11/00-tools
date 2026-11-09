@@ -473,8 +473,7 @@ function Get-FullPath {
 
 function Ensure-VersionArchiveControls {
     $controls = @(
-        @{ Name = 'version_archive_manager.py'; Contract = 'def download_all' },
-        @{ Name = 'Voice-Version-Archive.cmd'; Contract = 'version_archive_manager.py' }
+        @{ Name = 'version_archive_manager.py'; Contract = 'def download_all' }
     )
     $baseUrl = 'https://raw.githubusercontent.com/rensei11/00-tools/main/ai-voice/bootstrap/v1/'
     foreach ($control in $controls) {
